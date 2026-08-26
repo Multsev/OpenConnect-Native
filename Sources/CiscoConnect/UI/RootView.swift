@@ -14,14 +14,37 @@ struct RootView: View {
                     .background((model.status.canDisconnect ? Color.green : .accentColor).opacity(0.12), in: Circle())
                 VStack(alignment: .leading, spacing: 12) {
                     Text("AnyConnect VPN").font(.title3.weight(.semibold))
-                    Text(model.profile.normalized().gateway.isEmpty ? "Configure a gateway in Settings" : model.profile.normalized().gateway)
-                        .lineLimit(1).foregroundStyle(.secondary)
+                    if model.availableGroups.isEmpty {
+                        Text(model.profile.normalized().gateway.isEmpty ? "Configure a gateway in Settings" : model.profile.normalized().gateway)
+                            .lineLimit(1).foregroundStyle(.secondary)
+                    } else {
+                        Picker("VPN group", selection: Binding(
+                            get: { model.profile.group },
+                            set: { model.selectGroup($0) }
+                        )) {
+                            ForEach(model.availableGroups) { group in Text(group.label).tag(group.id) }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("VPN group")
+                    }
                     HStack {
-                        Text(model.status.canDisconnect ? "VPN is active" : "Ready to connect").foregroundStyle(.secondary)
+                        if model.status.state == .otpRequired {
+                            SecureField("One-time code", text: $model.otp)
+                                .textContentType(.oneTimeCode)
+                                .onSubmit { Task { await model.submitOTP() } }
+                            Button("Submit") { Task { await model.submitOTP() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        } else {
+                            Text(model.isDiscoveringGroups ? "Loading VPN groups…" : (model.status.canDisconnect ? "VPN is active" : "Ready to connect"))
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
-                        Button(model.status.canDisconnect ? "Disconnect" : "Connect") { Task { await model.toggleConnection() } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.status.isBusy || model.profile.normalized().gateway.isEmpty)
+                        if model.status.state != .otpRequired {
+                            Button(model.status.canDisconnect ? "Disconnect" : "Connect") { Task { await model.toggleConnection() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.status.isBusy || model.isDiscoveringGroups || model.profile.normalized().gateway.isEmpty)
+                        }
                     }
                 }
             }

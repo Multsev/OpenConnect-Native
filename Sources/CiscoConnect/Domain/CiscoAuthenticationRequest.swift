@@ -51,6 +51,9 @@ enum VPNError: LocalizedError, Equatable {
     case retryBlocked(Date)
     case transportUnavailable
     case openConnectRuntimeMissing
+    case authenticationTimeout
+    case otpNotRequested
+    case helperFailure(String)
 
     var errorDescription: String? {
         switch self {
@@ -59,6 +62,9 @@ enum VPNError: LocalizedError, Equatable {
         case let .retryBlocked(date): "Authentication is temporarily blocked until \(date.formatted(date: .omitted, time: .shortened))."
         case .transportUnavailable: "No privileged Cisco AnyConnect/OpenConnect tunnel transport is installed."
         case .openConnectRuntimeMissing: "The embedded OpenConnect runtime is missing. Reinstall CiscoConnect from its DMG."
+        case .authenticationTimeout: "The VPN gateway did not respond within 45 seconds. No credentials were retried."
+        case .otpNotRequested: "The VPN gateway is not waiting for a one-time code."
+        case let .helperFailure(message): message
         }
     }
 }

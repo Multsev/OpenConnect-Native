@@ -26,9 +26,10 @@ else
 fi
 mkdir -p "$(dirname "$app_path")"
 cp -R "$build_root/DerivedData/Build/Products/Release/CiscoConnect.app" "$app_path"
+./Scripts/build_openconnect_helper.sh "$app_path"
 ./Scripts/prepare_openconnect_runtime.sh "$app_path"
 find "$app_path/Contents/Frameworks" -type f -name '*.dylib' -exec codesign "${codesign_arguments[@]}" {} \;
-codesign "${codesign_arguments[@]}" "$app_path/Contents/Resources/OpenConnect/bin/openconnect"
+codesign "${codesign_arguments[@]}" "$app_path/Contents/Resources/OpenConnect/bin/CiscoConnectHelper"
 codesign "${codesign_arguments[@]}" --entitlements App/CiscoConnect.entitlements "$app_path"
 staging="$build_root/dmg-staging"
 mkdir -p "$staging"

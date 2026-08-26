@@ -21,6 +21,12 @@ final class VPNConnectionService {
         self.now = now
     }
 
+    func discoverGroups(profile: VPNProfile) async throws -> [VPNGroup] {
+        let normalized = profile.normalized()
+        guard let gateway = URL(string: normalized.gateway), gateway.scheme == "https", gateway.host != nil else { throw VPNError.invalidGateway }
+        return try await tunnel.discoverGroups(gateway: gateway)
+    }
+
     func connect(profile: VPNProfile, passwordOverride: String?, otp: String) async throws {
         let currentTime = now()
         if let retryDate = attemptGuard.retryDate(now: currentTime) { throw VPNError.retryBlocked(retryDate) }
@@ -50,11 +56,25 @@ final class VPNConnectionService {
         status = try await tunnel.disconnect()
     }
 
+    func submitOTP(_ value: String) async throws {
+        guard status.state == .otpRequired else { throw VPNError.otpNotRequested }
+        try await tunnel.submitOTP(value)
+        status = TunnelStatus(state: .authenticating, message: "Checking the one-time code", attemptID: status.attemptID)
+    }
+
     func refreshStatus() async throws -> TunnelStatus {
-        let updated = try await tunnel.currentStatus()
-        status = updated
-        if updated.state == .connected { attemptGuard.resetAfterSuccess() }
-        return updated
+        do {
+            let updated = try await tunnel.currentStatus()
+            status = updated
+            if updated.state == .connected { attemptGuard.resetAfterSuccess() }
+            return updated
+        } catch {
+            if isAuthenticationFailure(error), let attemptID = status.attemptID {
+                _ = attemptGuard.recordAuthenticationFailure(attemptID: attemptID, now: now())
+            }
+            status = TunnelStatus(state: .failed, message: error.localizedDescription, attemptID: status.attemptID)
+            throw error
+        }
     }
 
     private func isAuthenticationFailure(_ error: Error) -> Bool {
