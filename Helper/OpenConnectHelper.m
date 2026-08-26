@@ -52,7 +52,10 @@ static NSString *stringValue(const char *value) {
     NSDictionary *payload = @{ @"state": state, @"message": message, @"groups": groups };
     NSString *temporary = [self.statusPath stringByAppendingString:@".new"];
     [payload writeToFile:temporary atomically:YES];
-    chmod(temporary.fileSystemRepresentation, 0600);
+    // The elevated helper owns this file, while the GUI must read it. The
+    // parent session directory is user-owned 0700, so 0644 does not expose the
+    // state outside that private directory.
+    chmod(temporary.fileSystemRepresentation, 0644);
     rename(temporary.fileSystemRepresentation, self.statusPath.fileSystemRepresentation);
 }
 
@@ -80,6 +83,25 @@ static NSString *stringValue(const char *value) {
         if ([hint containsString:word]) return YES;
     }
     return option->type == OC_FORM_OPT_TOKEN || (self.passwordSubmitted && option->type == OC_FORM_OPT_PASSWORD);
+}
+
+- (BOOL)isUsernameOption:(struct oc_form_opt *)option form:(struct oc_auth_form *)form {
+    NSString *formID = stringValue(form->auth_id).lowercaseString;
+    NSString *name = stringValue(option->name).lowercaseString;
+    if ([formID isEqualToString:@"main"] && [name isEqualToString:@"username"]) return YES;
+    if (option->type != OC_FORM_OPT_TEXT) return NO;
+    NSString *hint = [NSString stringWithFormat:@"%@ %@", name, stringValue(option->label).lowercaseString];
+    for (NSString *word in @[@"user", @"login", @"логин", @"пользователь"]) {
+        if ([hint containsString:word]) return YES;
+    }
+    return NO;
+}
+
+- (BOOL)isPasswordOption:(struct oc_form_opt *)option form:(struct oc_auth_form *)form {
+    NSString *formID = stringValue(form->auth_id).lowercaseString;
+    NSString *name = stringValue(option->name).lowercaseString;
+    if ([formID isEqualToString:@"main"] && [name isEqualToString:@"password"]) return YES;
+    return option->type == OC_FORM_OPT_PASSWORD && !self.passwordSubmitted;
 }
 
 - (NSString *)waitForOTP {
@@ -127,16 +149,17 @@ static NSString *stringValue(const char *value) {
     }
     NSString *formID = stringValue(form->auth_id).lowercaseString;
     for (struct oc_form_opt *option = form->opts; option; option = option->next) {
-        if ((option->flags & OC_FORM_OPT_IGNORE) || option->type == OC_FORM_OPT_HIDDEN) continue;
-        NSString *name = stringValue(option->name).lowercaseString;
+        BOOL otpOption = [self isOTPOption:option form:form];
+        if (!otpOption && ((option->flags & OC_FORM_OPT_IGNORE) || option->type == OC_FORM_OPT_HIDDEN)) continue;
         NSString *value = nil;
-        if ([formID isEqualToString:@"main"] && [name isEqualToString:@"username"]) value = self.request[@"username"];
-        else if ([formID isEqualToString:@"main"] && [name isEqualToString:@"password"]) {
-            if (self.passwordSubmitted) { self.authenticationRejected = YES; return OC_FORM_RESULT_ERR; }
-            value = self.request[@"password"]; self.passwordSubmitted = YES; self.deadline = NSDate.date.timeIntervalSince1970 + 45;
-        } else if ([self isOTPOption:option form:form]) {
+        if ([self isUsernameOption:option form:form]) {
+            value = self.request[@"username"];
+        } else if (otpOption) {
             value = [self waitForOTP];
             if (!value) { self.authenticationRejected = self.otpSubmitted; return OC_FORM_RESULT_ERR; }
+        } else if ([self isPasswordOption:option form:form]) {
+            if (self.passwordSubmitted) { self.authenticationRejected = YES; return OC_FORM_RESULT_ERR; }
+            value = self.request[@"password"]; self.passwordSubmitted = YES; self.deadline = NSDate.date.timeIntervalSince1970 + 45;
         } else if (option->type == OC_FORM_OPT_SELECT && !option->_value) {
             struct oc_form_opt_select *select = (struct oc_form_opt_select *)option;
             if (select->nr_choices) openconnect_set_option_value(option, select->choices[0]->name);

@@ -27,6 +27,7 @@ fi
 mkdir -p "$(dirname "$app_path")"
 cp -R "$build_root/DerivedData/Build/Products/Release/CiscoConnect.app" "$app_path"
 ./Scripts/build_openconnect_helper.sh "$app_path"
+./Scripts/test_openconnect_ipc.sh "$app_path"
 ./Scripts/prepare_openconnect_runtime.sh "$app_path"
 find "$app_path/Contents/Frameworks" -type f -name '*.dylib' -exec codesign "${codesign_arguments[@]}" {} \;
 codesign "${codesign_arguments[@]}" "$app_path/Contents/Resources/OpenConnect/bin/CiscoConnectHelper"
