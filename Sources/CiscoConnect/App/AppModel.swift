@@ -14,6 +14,7 @@ final class AppModel {
     var errorMessage: String?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPassword = ""
+    @ObservationIgnored private let statusPollInterval: Duration
 
     private let profileStore: VPNProfileStore
     private let passwordStore: PasswordStore
@@ -24,12 +25,14 @@ final class AppModel {
         profileStore: VPNProfileStore,
         passwordStore: PasswordStore,
         connectionService: VPNConnectionService,
-        helperInstaller: PrivilegedHelperInstaller
+        helperInstaller: PrivilegedHelperInstaller,
+        statusPollInterval: Duration = .seconds(1)
     ) {
         self.profileStore = profileStore
         self.passwordStore = passwordStore
         self.connectionService = connectionService
         self.helperInstaller = helperInstaller
+        self.statusPollInterval = statusPollInterval
         profile = profileStore.load()
         status = connectionService.status
     }
@@ -132,7 +135,7 @@ final class AppModel {
         statusPollTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: self.statusPollInterval)
                 guard !Task.isCancelled else { return }
                 let updated: TunnelStatus
                 do { updated = try await self.connectionService.refreshStatus() }
@@ -150,7 +153,18 @@ final class AppModel {
                     self.password = ""
                     self.pendingPassword = ""
                 }
-                if !updated.isBusy { return }
+                switch updated.state {
+                case .connecting, .authenticating, .otpRequired, .connected:
+                    continue
+                case .disconnected:
+                    if updated.message != TunnelStatus.disconnected.message,
+                       updated.message != "VPN отключён пользователем" {
+                        self.errorMessage = updated.message
+                    }
+                    return
+                case .disconnecting, .failed:
+                    return
+                }
             }
         }
     }

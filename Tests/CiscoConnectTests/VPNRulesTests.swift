@@ -102,6 +102,42 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(guardService.recordedAttemptIDs.count, 1)
     }
 
+    @MainActor
+    func testAppModelKeepsPollingAfterConnectionAndReportsUnexpectedDisconnect() async throws {
+        let tunnel = RecordingTunnelClient()
+        let passwordStore = MemoryPasswordStore(password: "secret")
+        let service = VPNConnectionService(
+            passwordStore: passwordStore,
+            attemptGuard: RecordingAttemptGuard(),
+            tunnel: tunnel
+        )
+        let model = AppModel(
+            profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")),
+            passwordStore: passwordStore,
+            connectionService: service,
+            helperInstaller: PrivilegedHelperInstaller(),
+            statusPollInterval: .milliseconds(10)
+        )
+
+        await model.toggleConnection()
+        tunnel.status = TunnelStatus(state: .connected, message: "VPN connected", attemptID: tunnel.attemptID)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(model.status.state, .connected)
+
+        tunnel.status = TunnelStatus(state: .disconnected, message: "VPN-соединение прервано", attemptID: tunnel.attemptID)
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(model.status.state, .disconnected)
+        XCTAssertEqual(model.errorMessage, "VPN-соединение прервано")
+    }
+
+}
+
+private final class MemoryProfileStore: VPNProfileStore {
+    var profile: VPNProfile
+    init(profile: VPNProfile) { self.profile = profile }
+    func load() -> VPNProfile { profile }
+    func save(_ profile: VPNProfile) throws { self.profile = profile }
 }
 
 private final class MemoryPasswordStore: PasswordStore {
