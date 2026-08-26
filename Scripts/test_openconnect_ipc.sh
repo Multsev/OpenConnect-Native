@@ -27,6 +27,7 @@ chmod 600 "$request_path"
 
 [[ ! -e "$request_path" ]] || { echo "Helper request was not deleted." >&2; exit 1; }
 [[ -f "$status_path" ]] || { echo "Helper status was not created." >&2; exit 1; }
+plutil -extract networkInfo xml1 -o /dev/null "$status_path"
 [[ $(stat -f '%Lp' "$status_path") == 644 ]] || {
   echo "Helper status is not readable by the GUI." >&2
   exit 1

@@ -11,6 +11,24 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(profile.validationErrors(hasStoredPassword: false), ["Save the primary VPN password in Keychain."])
     }
 
+    func testNetworkInfoReadsAndNormalizesHelperPayload() {
+        let info = VPNNetworkInfo(propertyList: [
+            "available": true,
+            "includedRoutes": ["10.0.0.0/8", " 10.0.0.0/8 ", ""],
+            "excludedRoutes": ["192.168.0.0/16"],
+            "domains": ["corp.example.test", " corp.example.test"],
+            "dnsServers": ["10.1.0.53"],
+            "vpnAddresses": ["10.20.30.40"],
+        ])
+
+        XCTAssertTrue(info.usesSplitTunnel)
+        XCTAssertEqual(info.includedRoutes, ["10.0.0.0/8"])
+        XCTAssertEqual(info.excludedRoutes, ["192.168.0.0/16"])
+        XCTAssertEqual(info.domains, ["corp.example.test"])
+        XCTAssertEqual(info.dnsServers, ["10.1.0.53"])
+        XCTAssertEqual(info.vpnAddresses, ["10.20.30.40"])
+    }
+
     func testAuthenticationRequestKeepsOtpInChallengeField() throws {
         let request = try CiscoAuthenticationRequest(
             profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max"),

@@ -52,10 +52,10 @@ struct TunnelStatus: Equatable, Sendable {
     var state: TunnelState
     var message: String
     var attemptID: UUID?
+    var networkInfo: VPNNetworkInfo = .empty
 
     static let disconnected = TunnelStatus(state: .disconnected, message: "VPN disconnected", attemptID: nil)
 
     var isBusy: Bool { state.isBusy }
     var canDisconnect: Bool { state.canDisconnect }
 }
-

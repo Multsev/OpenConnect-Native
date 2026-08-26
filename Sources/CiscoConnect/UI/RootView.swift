@@ -3,8 +3,33 @@ import SwiftUI
 @MainActor
 struct RootView: View {
     @Bindable var model: AppModel
+    @State private var showsNetworkInfo = false
 
     var body: some View {
+        Group {
+            if showsNetworkInfo {
+                NetworkInfoView(
+                    networkInfo: model.networkInfo,
+                    isConnected: model.status.state == .connected,
+                    close: { showsNetworkInfo = false }
+                )
+            } else {
+                connectionView
+            }
+        }
+        .padding(14)
+        .frame(width: 460, height: 230, alignment: .topLeading)
+        .alert("VPN", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.errorMessage = nil } }
+        )) {
+            Button("Закрыть", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    private var connectionView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: model.status.canDisconnect ? "lock.open.fill" : "lock.fill")
@@ -71,6 +96,15 @@ struct RootView: View {
             Divider()
 
             HStack(spacing: 8) {
+                Button {
+                    showsNetworkInfo = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Сведения об адресах")
+                .accessibilityLabel("Сведения об адресах")
+
                 if model.status.isBusy || model.isDiscoveringGroups {
                     ProgressView()
                         .controlSize(.small)
@@ -91,16 +125,6 @@ struct RootView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(connectButtonDisabled)
             }
-        }
-        .padding(14)
-        .frame(width: 460)
-        .alert("VPN", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
-            Button("Закрыть", role: .cancel) { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
         }
     }
 
