@@ -131,6 +131,33 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "VPN-соединение прервано")
     }
 
+    @MainActor
+    func testRefreshGroupsUsesDiscoveryWithoutStartingConnection() async {
+        let tunnel = RecordingTunnelClient()
+        tunnel.discoveredGroups = [
+            VPNGroup(id: "staff", label: "Staff"),
+            VPNGroup(id: "admins", label: "Administrators"),
+        ]
+        let passwordStore = MemoryPasswordStore(password: "secret")
+        let model = AppModel(
+            profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "old", username: "max")),
+            passwordStore: passwordStore,
+            connectionService: VPNConnectionService(
+                passwordStore: passwordStore,
+                attemptGuard: RecordingAttemptGuard(),
+                tunnel: tunnel
+            ),
+            helperInstaller: PrivilegedHelperInstaller()
+        )
+
+        await model.refreshGroups()
+
+        XCTAssertEqual(tunnel.discoveryCount, 1)
+        XCTAssertEqual(tunnel.connectionCount, 0)
+        XCTAssertEqual(model.availableGroups, tunnel.discoveredGroups)
+        XCTAssertEqual(model.profile.group, "staff")
+    }
+
 }
 
 private final class MemoryProfileStore: VPNProfileStore {
@@ -162,11 +189,18 @@ private final class RecordingAttemptGuard: AttemptGuard {
 @MainActor
 private final class RecordingTunnelClient: TunnelClient {
     var status = TunnelStatus(state: .authenticating, message: "Authenticating", attemptID: nil)
+    var discoveredGroups = [VPNGroup(id: "staff", label: "Staff")]
+    var discoveryCount = 0
+    var connectionCount = 0
     var submittedOTPs: [String] = []
     var authenticationFailure = false
     var attemptID: UUID?
-    func discoverGroups(gateway: URL) async throws -> [VPNGroup] { [VPNGroup(id: "staff", label: "Staff")] }
+    func discoverGroups(gateway: URL) async throws -> [VPNGroup] {
+        discoveryCount += 1
+        return discoveredGroups
+    }
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus {
+        connectionCount += 1
         attemptID = request.attemptID
         status.attemptID = request.attemptID
         return status
