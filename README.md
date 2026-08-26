@@ -35,8 +35,9 @@ SAML/SSO в браузере, CSD/HostScan и клиентские сертиф�
 4. При первом запуске нажмите приложение правой кнопкой → **Открыть** →
    **Открыть**. Это одноразовое требование Gatekeeper для бесплатной ad-hoc
    подписи.
-5. Заполните профиль, сохраните пароль в Keychain и нажмите Connect. Подтвердите
-   системный запрос администратора.
+5. В единственном компактном окне заполните поля «Шлюз», «Логин» и «Пароль»,
+   затем нажмите «Подключиться». Полученная от сервера группа появится там же.
+   Пароль будет сохранён в Keychain после успешного подключения.
 
 ## Локальная сборка DMG
 
@@ -48,7 +49,7 @@ cd /Users/max/Downloads/CiscoConnect
 ./Scripts/package_dmg.sh development
 ```
 
-Результат: `build/CiscoConnect-0.2.0.dmg` и файл контрольной суммы рядом с ним.
+Результат: `build/CiscoConnect-0.2.1.dmg` и файл контрольной суммы рядом с ним.
 Скрипт компилирует helper, вкладывает `libopenconnect` и динамические библиотеки
 в приложение и подписывает каждый компонент ad-hoc-подписью. Проверка:
 
@@ -60,11 +61,11 @@ codesign --verify --deep --strict build/Release/CiscoConnect.app
 
 Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
 собирает DMG на macOS 14. Pull request публикует артефакт проверки, а тег вида
-`v0.1.0` создаёт GitHub Release с DMG и SHA-256:
+`v0.2.1` создаёт GitHub Release с DMG и SHA-256:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 Никакой Apple Developer Program для этого не нужен. Однако ad-hoc подпись не

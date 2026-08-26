@@ -6,13 +6,16 @@ struct CiscoConnectApp: App {
     @State private var appModel = AppModel.makeLive()
 
     var body: some Scene {
-        WindowGroup("CiscoConnect") {
+        Window("CiscoConnect", id: "main") {
             RootView(model: appModel)
-                .frame(minWidth: 520, idealWidth: 560, minHeight: 300, idealHeight: 340)
         }
+        .defaultSize(width: 460, height: 230)
+        .defaultPosition(.center)
+        .windowResizability(.contentSize)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandMenu("VPN") {
-                Button(appModel.status.canDisconnect ? "Disconnect" : "Connect") {
+                Button(appModel.status.canDisconnect ? "Отключиться" : "Подключиться") {
                     Task { await appModel.toggleConnection() }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
