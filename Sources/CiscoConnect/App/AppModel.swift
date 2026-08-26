@@ -7,6 +7,8 @@ final class AppModel {
     var profile: VPNProfile
     var password = ""
     var otp = ""
+    var availableGroups: [VPNGroup] = []
+    var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected
     var errorMessage: String?
     var isSaving = false
@@ -69,6 +71,16 @@ final class AppModel {
             if status.canDisconnect {
                 try await connectionService.disconnect()
             } else {
+                if profile.group.isEmpty, availableGroups.isEmpty {
+                    isDiscoveringGroups = true
+                    defer { isDiscoveringGroups = false }
+                    availableGroups = try await connectionService.discoverGroups(profile: profile)
+                    if let first = availableGroups.first {
+                        profile.group = first.id
+                        status = TunnelStatus(state: .disconnected, message: "Choose a VPN group, then connect", attemptID: nil)
+                        return
+                    }
+                }
                 try profileStore.save(profile)
                 let replacementPassword = password
                 // OTP is intentionally scoped to one attempt, including failures.
@@ -88,6 +100,23 @@ final class AppModel {
         status = connectionService.status
     }
 
+    func selectGroup(_ groupID: String) {
+        profile.group = groupID
+        try? profileStore.save(profile)
+    }
+
+    func submitOTP() async {
+        let value = otp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        otp = ""
+        do {
+            try await connectionService.submitOTP(value)
+            status = connectionService.status
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func pollTunnelStatus() {
         statusPollTask?.cancel()
         statusPollTask = Task { [weak self] in
@@ -95,7 +124,13 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                guard let updated = try? await self.connectionService.refreshStatus() else { return }
+                let updated: TunnelStatus
+                do { updated = try await self.connectionService.refreshStatus() }
+                catch {
+                    self.status = self.connectionService.status
+                    self.errorMessage = error.localizedDescription
+                    return
+                }
                 self.status = updated
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
                     try? self.passwordStore.save(self.pendingPassword)
