@@ -131,8 +131,18 @@ struct RootView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(connectButtonDisabled)
+
+                Text("v\(appVersion)")
+                    .font(.system(size: 9, weight: .regular, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Версия приложения \(appVersion)")
             }
         }
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
 
     private var connectButtonDisabled: Bool {
