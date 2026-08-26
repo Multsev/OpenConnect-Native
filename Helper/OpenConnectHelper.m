@@ -19,6 +19,7 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property BOOL timedOut;
 @property NSTimeInterval deadline;
 @property int commandFD;
+@property NSDictionary *networkInfo;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
 @end
@@ -49,7 +50,12 @@ static NSString *stringValue(const char *value) {
 @implementation HelperSession
 
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups {
-    NSDictionary *payload = @{ @"state": state, @"message": message, @"groups": groups };
+    NSDictionary *payload = @{
+        @"state": state,
+        @"message": message,
+        @"groups": groups,
+        @"networkInfo": self.networkInfo ?: @{}
+    };
     NSString *temporary = [self.statusPath stringByAppendingString:@".new"];
     [payload writeToFile:temporary atomically:YES];
     // The elevated helper owns this file, while the GUI must read it. The
@@ -57,6 +63,47 @@ static NSString *stringValue(const char *value) {
     // state outside that private directory.
     chmod(temporary.fileSystemRepresentation, 0644);
     rename(temporary.fileSystemRepresentation, self.statusPath.fileSystemRepresentation);
+}
+
+- (NSArray *)valuesFromSplitList:(const struct oc_split_include *)item {
+    NSMutableArray *values = [NSMutableArray array];
+    for (; item; item = item->next) {
+        NSString *value = stringValue(item->route);
+        if (value.length && ![values containsObject:value]) [values addObject:value];
+    }
+    return values;
+}
+
+- (NSDictionary *)networkInfoFromVPN {
+    const struct oc_ip_info *info = NULL;
+    const struct oc_vpn_option *cstpOptions = NULL;
+    const struct oc_vpn_option *dtlsOptions = NULL;
+    if (openconnect_get_ip_info(self.vpn, &info, &cstpOptions, &dtlsOptions) || !info) return @{};
+
+    NSMutableArray *domains = [[self valuesFromSplitList:info->split_dns] mutableCopy];
+    NSString *defaultDomain = stringValue(info->domain);
+    if (defaultDomain.length && ![domains containsObject:defaultDomain]) [domains addObject:defaultDomain];
+
+    NSMutableArray *dnsServers = [NSMutableArray array];
+    for (int index = 0; index < 3; index++) {
+        NSString *server = stringValue(info->dns[index]);
+        if (server.length && ![dnsServers containsObject:server]) [dnsServers addObject:server];
+    }
+
+    NSMutableArray *vpnAddresses = [NSMutableArray array];
+    NSString *ipv4 = stringValue(info->addr);
+    NSString *ipv6 = stringValue(info->addr6);
+    if (ipv4.length) [vpnAddresses addObject:ipv4];
+    if (ipv6.length) [vpnAddresses addObject:ipv6];
+
+    return @{
+        @"available": @YES,
+        @"includedRoutes": [self valuesFromSplitList:info->split_includes],
+        @"excludedRoutes": [self valuesFromSplitList:info->split_excludes],
+        @"domains": domains,
+        @"dnsServers": dnsServers,
+        @"vpnAddresses": vpnAddresses
+    };
 }
 
 - (NSArray *)groupsFromForm:(struct oc_auth_form *)form {
@@ -220,6 +267,7 @@ int main(int argc, const char *argv[]) {
             openconnect_vpninfo_free(session.vpn); session.vpn = NULL; return 73;
         }
         if (openconnect_make_cstp_connection(session.vpn)) { [session writeState:@"failed" message:@"Could not establish the encrypted VPN channel" groups:@[]]; return 74; }
+        session.networkInfo = [session networkInfoFromVPN];
         if (openconnect_setup_tun_device(session.vpn, [request[@"vpncScript"] UTF8String], NULL)) { [session writeState:@"failed" message:@"Could not create the macOS VPN interface" groups:@[]]; return 75; }
         openconnect_setup_dtls(session.vpn, 60);
         [session writeState:@"connected" message:@"VPN connected" groups:@[]];

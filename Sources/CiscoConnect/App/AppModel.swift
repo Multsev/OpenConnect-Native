@@ -10,6 +10,7 @@ final class AppModel {
     var availableGroups: [VPNGroup] = []
     var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected
+    var networkInfo: VPNNetworkInfo = .empty
     var errorMessage: String?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPassword = ""
@@ -115,6 +116,9 @@ final class AppModel {
                     return
                 }
                 self.status = updated
+                if updated.networkInfo.isAvailable {
+                    self.networkInfo = updated.networkInfo
+                }
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
                     try? self.passwordStore.save(self.pendingPassword)
                     self.password = ""

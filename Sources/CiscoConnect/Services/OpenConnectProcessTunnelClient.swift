@@ -85,7 +85,7 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             throw VPNError.helperFailure("VPN helper завершился до создания соединения")
         }
         switch snapshot.state {
-        case "connected": return TunnelStatus(state: .connected, message: snapshot.message, attemptID: attemptID)
+        case "connected": return TunnelStatus(state: .connected, message: snapshot.message, attemptID: attemptID, networkInfo: snapshot.networkInfo)
         case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID)
         case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID)
         case "authenticationFailed": throw AuthenticationFailure(message: snapshot.message)
@@ -125,7 +125,12 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             guard let id = item["id"], let label = item["label"] else { return nil }
             return VPNGroup(id: id, label: label)
         }
-        return HelperSnapshot(state: dictionary["state"] as? String ?? "failed", message: dictionary["message"] as? String ?? "VPN helper failed", groups: groups)
+        return HelperSnapshot(
+            state: dictionary["state"] as? String ?? "failed",
+            message: dictionary["message"] as? String ?? "VPN helper failed",
+            groups: groups,
+            networkInfo: VPNNetworkInfo(propertyList: dictionary["networkInfo"] as? [String: Any])
+        )
     }
 
     private func wait(for process: Process, timeout: TimeInterval) async -> Bool {
@@ -153,4 +158,9 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
 }
 
 private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let otp: URL; let pid: URL }
-private struct HelperSnapshot { let state: String; let message: String; let groups: [VPNGroup] }
+private struct HelperSnapshot {
+    let state: String
+    let message: String
+    let groups: [VPNGroup]
+    let networkInfo: VPNNetworkInfo
+}
