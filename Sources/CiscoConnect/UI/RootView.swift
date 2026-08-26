@@ -67,22 +67,38 @@ struct RootView: View {
                         .textContentType(.password)
                 }
 
-                if !model.availableGroups.isEmpty {
-                    inputRow("Группа") {
-                        Picker("Группа", selection: Binding(
-                            get: { model.profile.group },
-                            set: { model.selectGroup($0) }
-                        )) {
-                            ForEach(model.availableGroups) { group in
-                                Text(group.label).tag(group.id)
+                inputRow("Группа") {
+                    HStack(spacing: 6) {
+                        if !model.availableGroups.isEmpty {
+                            Picker("Группа", selection: Binding(
+                                get: { model.profile.group },
+                                set: { model.selectGroup($0) }
+                            )) {
+                                ForEach(model.availableGroups) { group in
+                                    Text(group.label).tag(group.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .accessibilityLabel("Группа")
+                        } else {
+                            TextField("Группа", text: $model.profile.group)
+                        }
+
+                        Button {
+                            Task { await model.refreshGroups() }
+                        } label: {
+                            if model.isDiscoveringGroups {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 14, height: 14)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
                             }
                         }
-                        .labelsHidden()
-                        .accessibilityLabel("Группа")
-                    }
-                } else if !model.profile.group.isEmpty {
-                    inputRow("Группа") {
-                        TextField("Группа", text: $model.profile.group)
+                        .buttonStyle(.borderless)
+                        .disabled(model.isDiscoveringGroups || model.status.canDisconnect)
+                        .help("Обновить группы")
+                        .accessibilityLabel("Обновить группы")
                     }
                 }
 

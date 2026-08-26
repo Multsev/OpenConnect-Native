@@ -118,6 +118,27 @@ final class AppModel {
         try? profileStore.save(profile)
     }
 
+    func refreshGroups() async {
+        guard !isDiscoveringGroups, !status.canDisconnect else { return }
+        errorMessage = nil
+        isDiscoveringGroups = true
+        defer { isDiscoveringGroups = false }
+
+        do {
+            let groups = try await connectionService.discoverGroups(profile: profile)
+            availableGroups = groups
+            guard !groups.isEmpty else {
+                errorMessage = "Шлюз не передал список групп."
+                return
+            }
+            if !groups.contains(where: { $0.id == profile.group }) {
+                selectGroup(groups[0].id)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func submitOTP() async {
         let value = otp.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
