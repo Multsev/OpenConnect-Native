@@ -36,6 +36,8 @@ codesign "${codesign_arguments[@]}" --entitlements App/CiscoConnect.entitlements
 staging="$build_root/dmg-staging"
 mkdir -p "$staging"
 cp -R "$app_path" "$staging/OpenConnect Native.app"
+plutil -extract CFBundleExecutable raw "$staging/OpenConnect Native.app/Contents/Info.plist" >/dev/null
+codesign --verify --deep --strict "$staging/OpenConnect Native.app"
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname "OpenConnect Native" -srcfolder "$staging" -ov -format UDZO "$dmg_path"
 shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
