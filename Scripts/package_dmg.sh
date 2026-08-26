@@ -8,8 +8,9 @@ mode=${1:-development}
 team_id=${TEAM_ID:-HW5E2337TG}
 build_root="$project_root/build"
 app_path="$build_root/Release/CiscoConnect.app"
-dmg_path="$build_root/CiscoConnect-${MARKETING_VERSION}.dmg"
+dmg_path="$build_root/OpenConnect-Native-${MARKETING_VERSION}.dmg"
 
+./Scripts/generate_app_icon.swift App/Resources/OpenConnectNative.icns App/Brand/OpenConnectNative-AppIcon.png
 ./Scripts/generate_xcode_project.sh
 rm -rf "$build_root"
 if [[ "$mode" == "release" ]]; then
@@ -34,9 +35,9 @@ codesign "${codesign_arguments[@]}" "$app_path/Contents/Resources/OpenConnect/bi
 codesign "${codesign_arguments[@]}" --entitlements App/CiscoConnect.entitlements "$app_path"
 staging="$build_root/dmg-staging"
 mkdir -p "$staging"
-cp -R "$app_path" "$staging/"
+cp -R "$app_path" "$staging/OpenConnect Native.app"
 ln -s /Applications "$staging/Applications"
-hdiutil create -volname "CiscoConnect" -srcfolder "$staging" -ov -format UDZO "$dmg_path"
+hdiutil create -volname "OpenConnect Native" -srcfolder "$staging" -ov -format UDZO "$dmg_path"
 shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
 echo "Created $dmg_path"
 [[ "$mode" != "release" ]] || echo "Notarize and staple this DMG before distribution."
