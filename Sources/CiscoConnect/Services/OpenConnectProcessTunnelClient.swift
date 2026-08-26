@@ -71,10 +71,18 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
 
     func currentStatus() async throws -> TunnelStatus {
         guard let attemptID, let statusFile else { return .disconnected }
-        guard let snapshot = try? readSnapshot(from: statusFile) else {
-            return process?.isRunning == true
-                ? TunnelStatus(state: .connecting, message: "Waiting for macOS authorization", attemptID: attemptID)
-                : .disconnected
+        let snapshot: HelperSnapshot
+        if fileManager.fileExists(atPath: statusFile.path) {
+            do {
+                snapshot = try readSnapshot(from: statusFile)
+            } catch {
+                throw VPNError.helperFailure("Не удалось прочитать состояние VPN helper")
+            }
+        } else if process?.isRunning == true {
+            return TunnelStatus(state: .connecting, message: "Waiting for macOS authorization", attemptID: attemptID)
+        } else {
+            cleanUp()
+            throw VPNError.helperFailure("VPN helper завершился до создания соединения")
         }
         switch snapshot.state {
         case "connected": return TunnelStatus(state: .connected, message: snapshot.message, attemptID: attemptID)
