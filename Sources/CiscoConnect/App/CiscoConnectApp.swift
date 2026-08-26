@@ -8,7 +8,7 @@ struct CiscoConnectApp: App {
     var body: some Scene {
         WindowGroup("CiscoConnect") {
             RootView(model: appModel)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 520, idealWidth: 560, minHeight: 300, idealHeight: 340)
         }
         .commands {
             CommandMenu("VPN") {
