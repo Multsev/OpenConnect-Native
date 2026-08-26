@@ -1,0 +1,36 @@
+name: Build release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: brew install xcodegen openconnect
+      - name: Build self-contained, ad-hoc-signed DMG
+        run: ./Scripts/package_dmg.sh development
+      - name: Verify signature and archive
+        run: |
+          codesign --verify --deep --strict build/Release/CiscoConnect.app
+          spctl --assess --type execute build/Release/CiscoConnect.app || true
+      - name: Upload pull-request artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CiscoConnect-DMG
+          path: build/CiscoConnect-*.dmg*
+      - name: Publish GitHub release assets
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/CiscoConnect-*.dmg build/CiscoConnect-*.dmg.sha256 --generate-notes || \
+          gh release upload "$GITHUB_REF_NAME" build/CiscoConnect-*.dmg build/CiscoConnect-*.dmg.sha256 --clobber
