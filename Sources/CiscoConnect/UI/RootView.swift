@@ -12,8 +12,13 @@ struct RootView: View {
                     .foregroundStyle(model.status.canDisconnect ? Color.green : .accentColor)
                     .frame(width: 38, height: 38)
                     .background((model.status.canDisconnect ? Color.green : .accentColor).opacity(0.12), in: Circle())
-                Text("AnyConnect VPN")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("OpenConnect Native")
+                        .font(.headline)
+                    Text("Совместимо с Cisco AnyConnect")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {

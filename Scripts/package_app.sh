@@ -6,18 +6,21 @@ cd "$project_root"
 source version.env
 
 swift build -c release
+./Scripts/generate_app_icon.swift App/Resources/OpenConnectNative.icns App/Brand/OpenConnectNative-AppIcon.png
 
-app_path="$project_root/CiscoConnect.app"
+app_path="$project_root/OpenConnect Native.app"
 rm -rf "$app_path"
-mkdir -p "$app_path/Contents/MacOS"
+mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 cp .build/release/CiscoConnect "$app_path/Contents/MacOS/CiscoConnect"
+cp App/Resources/OpenConnectNative.icns "$app_path/Contents/Resources/OpenConnectNative.icns"
 
 cat > "$app_path/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>CiscoConnect</string>
-  <key>CFBundleDisplayName</key><string>CiscoConnect</string>
+  <key>CFBundleName</key><string>OpenConnect Native</string>
+  <key>CFBundleDisplayName</key><string>OpenConnect Native</string>
+  <key>CFBundleIconFile</key><string>OpenConnectNative</string>
   <key>CFBundleIdentifier</key><string>com.max.ciscoconnect</string>
   <key>CFBundleExecutable</key><string>CiscoConnect</string>
   <key>CFBundlePackageType</key><string>APPL</string>

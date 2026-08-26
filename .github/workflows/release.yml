@@ -25,12 +25,12 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: CiscoConnect-DMG
-          path: build/CiscoConnect-*.dmg*
+          name: OpenConnect-Native-DMG
+          path: build/OpenConnect-Native-*.dmg*
       - name: Publish GitHub release assets
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" build/CiscoConnect-*.dmg build/CiscoConnect-*.dmg.sha256 --generate-notes || \
-          gh release upload "$GITHUB_REF_NAME" build/CiscoConnect-*.dmg build/CiscoConnect-*.dmg.sha256 --clobber
+          gh release create "$GITHUB_REF_NAME" build/OpenConnect-Native-*.dmg build/OpenConnect-Native-*.dmg.sha256 --generate-notes || \
+          gh release upload "$GITHUB_REF_NAME" build/OpenConnect-Native-*.dmg build/OpenConnect-Native-*.dmg.sha256 --clobber

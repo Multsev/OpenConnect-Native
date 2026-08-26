@@ -6,7 +6,7 @@ struct CiscoConnectApp: App {
     @State private var appModel = AppModel.makeLive()
 
     var body: some Scene {
-        Window("CiscoConnect", id: "main") {
+        Window("OpenConnect Native", id: "main") {
             RootView(model: appModel)
         }
         .defaultSize(width: 460, height: 230)
