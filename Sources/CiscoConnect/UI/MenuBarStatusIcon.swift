@@ -20,12 +20,12 @@ enum MenuBarIconAppearance: Equatable {
         }
     }
 
-    var color: Color {
+    var nsColor: NSColor {
         switch self {
-        case .offline: Color(nsColor: .secondaryLabelColor)
-        case .working: Color(nsColor: .systemYellow)
-        case .online: Color(nsColor: .systemGreen)
-        case .error: Color(nsColor: .systemRed)
+        case .offline: .secondaryLabelColor
+        case .working: .systemYellow
+        case .online: .systemGreen
+        case .error: .systemRed
         }
     }
 
@@ -48,39 +48,56 @@ struct MenuBarStatusIcon: View {
     }
 
     var body: some View {
-        OpenConnectMenuBarMark()
-            .stroke(
-                appearance.color,
-                style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
-            )
-            .shadow(
-                color: appearance == .offline ? .clear : appearance.color.opacity(0.65),
-                radius: 1.5
-            )
-            .frame(width: 18, height: 18)
+        Image(nsImage: menuBarImage)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(appearance.accessibilityLabel)
     }
+
+    private var menuBarImage: NSImage {
+        let appearance = appearance
+        let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { rect in
+            let path = OpenConnectMenuBarMark.path(in: rect.insetBy(dx: 1, dy: 1))
+            let context = NSGraphicsContext.current?.cgContext
+            context?.saveGState()
+            if appearance != .offline {
+                context?.setShadow(
+                    offset: .zero,
+                    blur: 2.5,
+                    color: appearance.nsColor.withAlphaComponent(0.7).cgColor
+                )
+            }
+            appearance.nsColor.setStroke()
+            path.lineWidth = 2.2
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.stroke()
+            context?.restoreGState()
+            return true
+        }
+        // State colors must remain visible instead of inheriting the menu-bar tint.
+        image.isTemplate = false
+        return image
+    }
 }
 
-private struct OpenConnectMenuBarMark: Shape {
-    func path(in rect: CGRect) -> Path {
+private enum OpenConnectMenuBarMark {
+    static func path(in rect: CGRect) -> NSBezierPath {
         func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
             CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
         }
 
-        var path = Path()
+        let path = NSBezierPath()
         path.move(to: point(0.18, 0.82))
-        path.addLine(to: point(0.18, 0.43))
-        path.addCurve(
+        path.line(to: point(0.18, 0.43))
+        path.curve(
             to: point(0.82, 0.43),
-            control1: point(0.18, 0.10),
-            control2: point(0.82, 0.10)
+            controlPoint1: point(0.18, 0.10),
+            controlPoint2: point(0.82, 0.10)
         )
 
         path.move(to: point(0.50, 0.43))
-        path.addLine(to: point(0.50, 0.86))
-        path.addEllipse(in: CGRect(
+        path.line(to: point(0.50, 0.86))
+        path.appendOval(in: CGRect(
             x: rect.minX + rect.width * 0.42,
             y: rect.minY + rect.height * 0.35,
             width: rect.width * 0.16,
@@ -88,7 +105,7 @@ private struct OpenConnectMenuBarMark: Shape {
         ))
 
         path.move(to: point(0.82, 0.72))
-        path.addLine(to: point(0.82, 0.84))
+        path.line(to: point(0.82, 0.84))
         return path
     }
 }
