@@ -1,0 +1,49 @@
+name: CiscoConnect
+options:
+  bundleIdPrefix: com.max
+  xcodeVersion: "15.4"
+  projectFormat: xcode15_3
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  CiscoConnect:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/CiscoConnect
+        excludes:
+          - "Resources"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.max.ciscoconnect
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/CiscoConnect.entitlements
+    dependencies:
+      - target: CiscoTunnel
+        embed: true
+  CiscoTunnel:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: Extensions/CiscoTunnel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.max.ciscoconnect.tunnel
+        INFOPLIST_FILE: Extensions/CiscoTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Extensions/CiscoTunnel/CiscoTunnel.entitlements
+        SYSTEM_EXTENSION_API_ONLY: YES
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/OpenConnect/include /opt/homebrew/include"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/OpenConnect/lib /opt/homebrew/lib"
+        OTHER_LDFLAGS: "-lopenconnect"
+        SWIFT_OBJC_BRIDGING_HEADER: Extensions/CiscoTunnel/CiscoTunnel-Bridging-Header.h
+    dependencies:
+      - framework: NetworkExtension.framework
+      - framework: Security.framework

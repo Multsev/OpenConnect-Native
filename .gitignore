@@ -1,4 +1,6 @@
 .build/
 *.app/
 .DS_Store
-
+CiscoConnect.xcodeproj/
+Vendor/OpenConnect/include/
+Vendor/OpenConnect/lib/

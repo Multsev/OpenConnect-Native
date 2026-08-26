@@ -50,6 +50,13 @@ final class VPNConnectionService {
         status = try await tunnel.disconnect()
     }
 
+    func refreshStatus() async throws -> TunnelStatus {
+        let updated = try await tunnel.currentStatus()
+        status = updated
+        if updated.state == .connected { attemptGuard.resetAfterSuccess() }
+        return updated
+    }
+
     private func isAuthenticationFailure(_ error: Error) -> Bool {
         // Real transports must throw an AuthenticationFailure error after a rejected credential form.
         error is AuthenticationFailure
@@ -60,4 +67,3 @@ struct AuthenticationFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
-
