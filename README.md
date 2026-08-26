@@ -81,3 +81,26 @@ Tests/               # правила профиля и защиты от пов
 соберите arm64/x86_64 runtime, подпишите сначала вложенные dylib, затем system
 extension и приложение, после чего выполните notarization. Подробности о
 структуре runtime — в `Vendor/OpenConnect/README.md`.
+
+### DMG
+
+Локальная DMG собирается одной командой:
+
+```bash
+./Scripts/package_dmg.sh development
+```
+
+Она появится как `build/CiscoConnect-0.1.0.dmg` и включает GUI, system
+extension и OpenConnect runtime. Для рабочего VPN macOS требуется действующий
+Network Extensions provisioning profile.
+
+Для распространяемой версии нужны Apple Developer Program, Network Extensions
+для обоих bundle ID и Developer ID Application certificate:
+
+```bash
+TEAM_ID=YOUR_TEAM_ID \
+SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+./Scripts/package_dmg.sh release
+```
+
+После release-сборки выполните `xcrun notarytool submit` и `xcrun stapler staple`.
