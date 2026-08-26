@@ -11,7 +11,6 @@ final class AppModel {
     var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected
     var errorMessage: String?
-    var isSaving = false
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPassword = ""
 
@@ -48,22 +47,6 @@ final class AppModel {
     }
 
     var hasStoredPassword: Bool { passwordStore.hasPassword }
-
-    func saveProfile() {
-        isSaving = true
-        defer { isSaving = false }
-        do {
-            try profileStore.save(profile)
-            if !password.isEmpty {
-                try passwordStore.save(password)
-                password = ""
-            }
-            profile = profile.normalized()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 
     func toggleConnection() async {
         errorMessage = nil
