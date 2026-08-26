@@ -16,6 +16,7 @@ struct RootView: View {
     @AppStorage(AppPresentationPreferences.menuBarIntroductionKey) private var didShowMenuBarIntroduction = false
     @State private var showsNetworkInfo = false
     @State private var showsMenuBarIntroduction = false
+    @State private var showsHelperRemovalConfirmation = false
 
     var body: some View {
         Group {
@@ -23,14 +24,7 @@ struct RootView: View {
                 NetworkInfoView(
                     networkInfo: model.networkInfo,
                     isConnected: model.status.state == .connected,
-                    isSystemHelperInstalled: model.isSystemHelperInstalled,
-                    close: { showsNetworkInfo = false },
-                    removeSystemHelper: {
-                        Task {
-                            await model.uninstallSystemHelper()
-                            showsNetworkInfo = false
-                        }
-                    }
+                    close: { showsNetworkInfo = false }
                 )
             } else {
                 connectionView
@@ -50,6 +44,14 @@ struct RootView: View {
             Button("Понятно", role: .cancel) {}
         } message: {
             Text("OpenConnect Native также доступен по цветному значку в верхней строке macOS. Режим можно изменить через шестерёнку → «Только строка меню».")
+        }
+        .alert("Удалить системный компонент?", isPresented: $showsHelperRemovalConfirmation) {
+            Button("Удалить", role: .destructive) {
+                Task { await model.uninstallSystemHelper() }
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("VPN будет отключён. macOS один раз запросит пароль администратора и удалит helper и LaunchDaemon.")
         }
         .task {
             guard presentation == .window else { return }
@@ -153,6 +155,11 @@ struct RootView: View {
                         get: { menuBarOnly },
                         set: setMenuBarOnly
                     ))
+                    Divider()
+                    Button("Удалить системный компонент…", role: .destructive) {
+                        showsHelperRemovalConfirmation = true
+                    }
+                    .disabled(!model.isSystemHelperInstalled)
                     Divider()
                     Button("Завершить приложение") {
                         NSApplication.shared.terminate(nil)
