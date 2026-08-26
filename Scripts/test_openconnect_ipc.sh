@@ -8,6 +8,10 @@ uninstaller="$app_path/Contents/Resources/UninstallPrivilegedHelper.sh"
 daemon_plist="$app_path/Contents/Resources/com.max.openconnectnative.helper.plist"
 [[ -x "$helper" ]] || { echo "CiscoConnectHelper was not built." >&2; exit 1; }
 [[ -x "$installer" && -x "$uninstaller" ]] || { echo "Privileged helper lifecycle scripts are missing." >&2; exit 1; }
+/usr/bin/otool -L "$helper" | /usr/bin/grep -Fq 'SystemConfiguration.framework' || {
+  echo "Helper is missing SystemConfiguration runtime checks." >&2
+  exit 1
+}
 /bin/bash -n "$installer" "$uninstaller"
 /usr/bin/plutil -lint "$daemon_plist" >/dev/null
 /usr/bin/grep -Fq '/Library/PrivilegedHelperTools/com.max.openconnectnative.runtime' "$uninstaller"

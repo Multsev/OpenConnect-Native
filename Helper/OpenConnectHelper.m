@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <SystemConfiguration/SystemConfiguration.h>
 #import <openconnect.h>
 #import <errno.h>
 #import <fcntl.h>
@@ -21,11 +22,14 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property BOOL groupApplied;
 @property BOOL authenticationRejected;
 @property BOOL timedOut;
+@property BOOL authenticationComplete;
+@property BOOL disconnectRequested;
 @property NSTimeInterval deadline;
 @property int commandFD;
 @property NSDictionary *networkInfo;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
+- (BOOL)systemConfigurationIsReady;
 @end
 
 static HelperSession *activeSession;
@@ -98,6 +102,24 @@ static void progress_callback(void *data, int level, const char *format, ...) {
         @"excludedRoutes": [self valuesFromSplitList:info->split_excludes],
         @"domains": domains, @"dnsServers": dnsServers, @"vpnAddresses": vpnAddresses
     };
+}
+
+- (BOOL)systemConfigurationIsReady {
+    NSString *interfaceName = stringValue(openconnect_get_ifname(self.vpn));
+    if (!interfaceName.length) return NO;
+
+    NSString *dnsKey = [NSString stringWithFormat:@"State:/Network/Service/%@/DNS", interfaceName];
+    NSString *ipv4Key = [NSString stringWithFormat:@"State:/Network/Service/%@/IPv4", interfaceName];
+    NSDictionary *dnsState = CFBridgingRelease(SCDynamicStoreCopyValue(NULL, (__bridge CFStringRef)dnsKey));
+    NSDictionary *ipv4State = CFBridgingRelease(SCDynamicStoreCopyValue(NULL, (__bridge CFStringRef)ipv4Key));
+    NSArray *activeDNS = [dnsState[@"ServerAddresses"] isKindOfClass:NSArray.class] ? dnsState[@"ServerAddresses"] : @[];
+    NSArray *activeAddresses = [ipv4State[@"Addresses"] isKindOfClass:NSArray.class] ? ipv4State[@"Addresses"] : @[];
+    NSArray *expectedDNS = self.networkInfo[@"dnsServers"] ?: @[];
+    NSArray *expectedAddresses = self.networkInfo[@"vpnAddresses"] ?: @[];
+
+    for (NSString *server in expectedDNS) if (![activeDNS containsObject:server]) return NO;
+    for (NSString *address in expectedAddresses) if (![activeAddresses containsObject:address]) return NO;
+    return expectedDNS.count == 0 || activeDNS.count > 0;
 }
 
 - (NSArray *)groupsFromForm:(struct oc_auth_form *)form {
@@ -231,6 +253,7 @@ static void progress_callback(void *data, int level, const char *format, ...) {
 static void stop_signal(int signalNumber) {
     (void)signalNumber;
     HelperSession *session = activeSession;
+    if (session) session.disconnectRequested = YES;
     if (session && session.commandFD >= 0) write(session.commandFD, "x", 1);
 }
 
@@ -247,8 +270,8 @@ static NSString *installedContainerRoot(void) {
 
 static void scheduleTimeout(HelperSession *session) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        while (session.vpn && NSDate.date.timeIntervalSince1970 < session.deadline) usleep(200000);
-        if (session.vpn && NSDate.date.timeIntervalSince1970 >= session.deadline) {
+        while (session.vpn && !session.authenticationComplete && NSDate.date.timeIntervalSince1970 < session.deadline) usleep(200000);
+        if (session.vpn && !session.authenticationComplete && NSDate.date.timeIntervalSince1970 >= session.deadline) {
             session.timedOut = YES;
             if (session.commandFD >= 0) write(session.commandFD, "x", 1);
         }
@@ -281,6 +304,7 @@ static int runRequest(NSDictionary *originalRequest) {
     openconnect_set_reported_os(session.vpn, "mac-intel");
     if (openconnect_parse_url(session.vpn, [request[@"gateway"] UTF8String])) { result = 72; goto finished; }
     int auth = openconnect_obtain_cookie(session.vpn);
+    session.authenticationComplete = auth == 0;
     if (session.mode == HelperModeDiscover) goto finished;
     if (auth) {
         if (session.passwordSubmitted && !session.timedOut) session.authenticationRejected = YES;
@@ -297,10 +321,25 @@ static int runRequest(NSDictionary *originalRequest) {
         [session writeState:@"failed" message:@"Could not create the macOS VPN interface" groups:@[]];
         result = 75; goto finished;
     }
+    BOOL configurationReady = NO;
+    for (int check = 0; check < 20 && !configurationReady; check++) {
+        configurationReady = [session systemConfigurationIsReady];
+        if (!configurationReady) usleep(100000);
+    }
+    if (!configurationReady) {
+        [session writeState:@"failed" message:@"macOS не применила VPN-адрес или корпоративные DNS" groups:@[]];
+        result = 76; goto finished;
+    }
     openconnect_setup_dtls(session.vpn, 60);
     [session writeState:@"connected" message:@"VPN connected" groups:@[]];
-    openconnect_mainloop(session.vpn, RECONNECT_INTERVAL_MIN, RECONNECT_INTERVAL_MIN);
-    [session writeState:@"disconnected" message:@"VPN disconnected" groups:@[]];
+    int mainloopResult = openconnect_mainloop(session.vpn, 300, RECONNECT_INTERVAL_MIN);
+    if (session.disconnectRequested) {
+        [session writeState:@"disconnected" message:@"VPN отключён пользователем" groups:@[]];
+    } else {
+        NSString *message = [NSString stringWithFormat:@"VPN-соединение прервано; автоматическое восстановление не удалось (код OpenConnect: %d)", mainloopResult];
+        [session writeState:@"failed" message:message groups:@[]];
+        result = mainloopResult ?: 77;
+    }
 
 finished:
     if (session.vpn) openconnect_vpninfo_free(session.vpn);
@@ -379,6 +418,7 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
     if ([command isEqualToString:@"ping"]) { sendReply(event, YES, @""); return; }
     if ([command isEqualToString:@"disconnect"]) {
         HelperSession *session = activeSession;
+        if (session) session.disconnectRequested = YES;
         if (session && session.commandFD >= 0) write(session.commandFD, "x", 1);
         sendReply(event, YES, @"");
         return;
