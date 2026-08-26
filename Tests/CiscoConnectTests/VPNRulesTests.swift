@@ -11,6 +11,16 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(profile.validationErrors(hasStoredPassword: false), ["Save the primary VPN password in Keychain."])
     }
 
+    func testMenuBarAppearanceReflectsTunnelState() {
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .disconnected), .offline)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .connecting), .working)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .authenticating), .working)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .otpRequired), .working)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .disconnecting), .working)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .connected), .online)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .failed), .error)
+    }
+
     func testNetworkInfoReadsAndNormalizesHelperPayload() {
         let info = VPNNetworkInfo(propertyList: [
             "available": true,

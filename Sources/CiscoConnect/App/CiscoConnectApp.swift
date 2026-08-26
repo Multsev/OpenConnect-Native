@@ -9,21 +9,8 @@ struct CiscoConnectApp: App {
         MenuBarExtra {
             RootView(model: appModel)
         } label: {
-            Label("OpenConnect Native", systemImage: menuBarIcon)
+            MenuBarStatusIcon(tunnelState: appModel.status.state)
         }
         .menuBarExtraStyle(.window)
-    }
-
-    private var menuBarIcon: String {
-        switch appModel.status.state {
-        case .connected:
-            return "lock.open.fill"
-        case .connecting, .authenticating, .otpRequired, .disconnecting:
-            return "arrow.triangle.2.circlepath"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        case .disconnected:
-            return "lock.fill"
-        }
     }
 }

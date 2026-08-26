@@ -5,8 +5,9 @@
 или отдельная установка VPN-клиента.
 
 Приложение работает из строки меню macOS и не занимает место в Dock. Нажатие
-на значок замка открывает компактное окно подключения и настроек; значок
-показывает состояние VPN.
+на фирменный значок открывает компактное окно подключения и настроек. Цвет
+самой пиктограммы показывает состояние VPN: серый — отключено, жёлтый — идёт
+подключение, зелёный — подключено, красный — соединение оборвалось с ошибкой.
 
 OpenConnect Native — независимый проект. Он не связан с Cisco Systems и не
 является официальным приложением проекта OpenConnect. Названия Cisco и
@@ -93,8 +94,8 @@ cd /Users/max/Downloads/CiscoConnect
 Готовые файлы всегда находятся только в папке `Releases`:
 
 ```bash
-Releases/OpenConnect-Native-0.5.0.dmg
-Releases/OpenConnect-Native-0.5.0.dmg.sha256
+Releases/OpenConnect-Native-0.5.1.dmg
+Releases/OpenConnect-Native-0.5.1.dmg.sha256
 ```
 
 Папка `build` используется только во время сборки и удаляется автоматически.
@@ -106,11 +107,11 @@ Releases/OpenConnect-Native-0.5.0.dmg.sha256
 
 Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
 собирает DMG на macOS 14. Pull request публикует артефакт проверки, а тег вида
-`v0.5.0` создаёт GitHub Release с DMG и SHA-256:
+`v0.5.1` создаёт GitHub Release с DMG и SHA-256:
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 Никакой Apple Developer Program для этого не нужен. Однако ad-hoc подпись не
