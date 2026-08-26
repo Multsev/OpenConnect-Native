@@ -6,15 +6,23 @@ import Foundation
 final class OpenConnectProcessTunnelClient: TunnelClient {
     private let fileManager: FileManager
     private let temporaryDirectory: URL
-    private var process: Process?
+    private let helperConnection: PrivilegedHelperConnection
+    private let helperInstaller: PrivilegedHelperInstaller
     private var sessionDirectory: URL?
     private var statusFile: URL?
     private var otpFile: URL?
     private var attemptID: UUID?
 
-    init(fileManager: FileManager = .default, temporaryDirectory: URL = FileManager.default.temporaryDirectory) {
+    init(
+        fileManager: FileManager = .default,
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        helperConnection: PrivilegedHelperConnection,
+        helperInstaller: PrivilegedHelperInstaller
+    ) {
         self.fileManager = fileManager
         self.temporaryDirectory = temporaryDirectory
+        self.helperConnection = helperConnection
+        self.helperInstaller = helperInstaller
     }
 
     func discoverGroups(gateway: URL) async throws -> [VPNGroup] {
@@ -32,16 +40,19 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
     }
 
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus {
-        guard process?.isRunning != true else {
+        guard sessionDirectory == nil else {
             return TunnelStatus(state: .connecting, message: "VPN connection is already starting", attemptID: request.attemptID)
         }
+        try await helperInstaller.ensureInstalled(connection: helperConnection)
         let paths = try createSession(mode: "connect", gateway: request.gateway, request: request)
-        let elevated = Process()
-        elevated.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        let command = "exec \(shellQuote(paths.helper.path)) \(shellQuote(paths.request.path))"
-        elevated.arguments = ["-e", "do shell script \(appleScriptLiteral(command)) with administrator privileges"]
-        do { try elevated.run() } catch { try? fileManager.removeItem(at: paths.directory); throw error }
-        process = elevated
+        let payload = try Data(contentsOf: paths.request)
+        try? fileManager.removeItem(at: paths.request)
+        do {
+            try await helperConnection.connect(payload: payload)
+        } catch {
+            try? fileManager.removeItem(at: paths.directory)
+            throw error
+        }
         sessionDirectory = paths.directory
         statusFile = paths.status
         otpFile = paths.otp
@@ -51,19 +62,15 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
 
     func submitOTP(_ value: String) async throws {
         guard let otpFile, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw VPNError.otpNotRequested }
-        try Data(value.utf8).write(to: otpFile, options: .atomic)
+        // The root helper protects the session directory from path substitution;
+        // the pre-created OTP file remains user-owned and writable in place.
+        try Data(value.utf8).write(to: otpFile)
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otpFile.path)
     }
 
     func disconnect() async throws -> TunnelStatus {
-        if let process, process.isRunning {
-            process.interrupt()
-            if let pid = privilegedPID() {
-                let stop = Process()
-                stop.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                stop.arguments = ["-e", "do shell script \(appleScriptLiteral("/bin/kill -INT \(pid)")) with administrator privileges"]
-                try stop.run()
-            }
+        if sessionDirectory != nil {
+            try await helperConnection.disconnect()
         }
         cleanUp()
         return .disconnected
@@ -78,8 +85,8 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             } catch {
                 throw VPNError.helperFailure("Не удалось прочитать состояние VPN helper")
             }
-        } else if process?.isRunning == true {
-            return TunnelStatus(state: .connecting, message: "Waiting for macOS authorization", attemptID: attemptID)
+        } else if sessionDirectory != nil {
+            return TunnelStatus(state: .connecting, message: "Запуск системного VPN-компонента", attemptID: attemptID)
         } else {
             cleanUp()
             throw VPNError.helperFailure("VPN helper завершился до создания соединения")
@@ -88,8 +95,12 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         case "connected": return TunnelStatus(state: .connected, message: snapshot.message, attemptID: attemptID, networkInfo: snapshot.networkInfo)
         case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID)
         case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID)
-        case "authenticationFailed": throw AuthenticationFailure(message: snapshot.message)
-        case "failed": throw VPNError.helperFailure(snapshot.message)
+        case "authenticationFailed":
+            cleanUp()
+            throw AuthenticationFailure(message: snapshot.message)
+        case "failed":
+            cleanUp()
+            throw VPNError.helperFailure(snapshot.message)
         case "disconnected": cleanUp(); return .disconnected
         default: return TunnelStatus(state: .connecting, message: snapshot.message, attemptID: attemptID)
         }
@@ -104,6 +115,8 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         let status = directory.appending(path: "status.plist")
         let otp = directory.appending(path: "otp")
         let pid = directory.appending(path: "pid")
+        try Data().write(to: otp)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otp.path)
         var payload: [String: Any] = ["mode": mode, "gateway": gateway.absoluteString, "statusPath": status.path, "otpPath": otp.path, "pidPath": pid.path, "vpncScript": script.path]
         if let request { payload.merge(["username": request.username, "password": request.password, "group": request.group]) { _, new in new } }
         guard (payload as NSDictionary).write(to: requestFile, atomically: true) else { throw VPNError.helperFailure("Could not prepare the helper request") }
@@ -141,20 +154,27 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         return !process.isRunning
     }
 
-    private func privilegedPID() -> Int? {
-        guard let sessionDirectory else { return nil }
-        let url = sessionDirectory.appending(path: "pid")
-        return (try? String(contentsOf: url, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    }
-
     private func cleanUp() {
-        process = nil; attemptID = nil; statusFile = nil; otpFile = nil
-        if let sessionDirectory { try? fileManager.removeItem(at: sessionDirectory) }
+        attemptID = nil; statusFile = nil; otpFile = nil
+        if let sessionDirectory {
+            do {
+                try fileManager.removeItem(at: sessionDirectory)
+            } catch {
+                let directory = sessionDirectory
+                Task.detached {
+                    for _ in 0..<10 {
+                        try? await Task.sleep(for: .milliseconds(250))
+                        do {
+                            try FileManager.default.removeItem(at: directory)
+                            return
+                        } catch {}
+                    }
+                }
+            }
+        }
         sessionDirectory = nil
     }
 
-    private func shellQuote(_ value: String) -> String { "'\(value.replacingOccurrences(of: "'", with: "'\\\"'\\\"'"))'" }
-    private func appleScriptLiteral(_ value: String) -> String { "\"\(value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\"" }
 }
 
 private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let otp: URL; let pid: URL }

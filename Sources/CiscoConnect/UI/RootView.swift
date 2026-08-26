@@ -11,7 +11,14 @@ struct RootView: View {
                 NetworkInfoView(
                     networkInfo: model.networkInfo,
                     isConnected: model.status.state == .connected,
-                    close: { showsNetworkInfo = false }
+                    isSystemHelperInstalled: model.isSystemHelperInstalled,
+                    close: { showsNetworkInfo = false },
+                    removeSystemHelper: {
+                        Task {
+                            await model.uninstallSystemHelper()
+                            showsNetworkInfo = false
+                        }
+                    }
                 )
             } else {
                 connectionView
