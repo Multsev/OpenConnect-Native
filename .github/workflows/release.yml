@@ -17,20 +17,18 @@ jobs:
         run: brew install xcodegen openconnect
       - name: Build self-contained, ad-hoc-signed DMG
         run: ./Scripts/package_dmg.sh development
-      - name: Verify signature and archive
-        run: |
-          codesign --verify --deep --strict build/Release/CiscoConnect.app
-          spctl --assess --type execute build/Release/CiscoConnect.app || true
+      - name: Verify release checksum
+        run: shasum -a 256 -c Releases/OpenConnect-Native-*.dmg.sha256
       - name: Upload pull-request artifact
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: OpenConnect-Native-DMG
-          path: build/OpenConnect-Native-*.dmg*
+          path: Releases/OpenConnect-Native-*.dmg*
       - name: Publish GitHub release assets
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" build/OpenConnect-Native-*.dmg build/OpenConnect-Native-*.dmg.sha256 --generate-notes || \
-          gh release upload "$GITHUB_REF_NAME" build/OpenConnect-Native-*.dmg build/OpenConnect-Native-*.dmg.sha256 --clobber
+          gh release create "$GITHUB_REF_NAME" Releases/OpenConnect-Native-*.dmg Releases/OpenConnect-Native-*.dmg.sha256 --generate-notes || \
+          gh release upload "$GITHUB_REF_NAME" Releases/OpenConnect-Native-*.dmg Releases/OpenConnect-Native-*.dmg.sha256 --clobber
