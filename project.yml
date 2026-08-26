@@ -26,24 +26,3 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.max.ciscoconnect
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/CiscoConnect.entitlements
-    dependencies:
-      - target: CiscoTunnel
-        embed: true
-  CiscoTunnel:
-    type: system-extension
-    platform: macOS
-    sources:
-      - path: Extensions/CiscoTunnel
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.max.ciscoconnect.tunnel
-        INFOPLIST_FILE: Extensions/CiscoTunnel/Info.plist
-        CODE_SIGN_ENTITLEMENTS: Extensions/CiscoTunnel/CiscoTunnel.entitlements
-        SYSTEM_EXTENSION_API_ONLY: YES
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/OpenConnect/include /opt/homebrew/include"
-        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/OpenConnect/lib /opt/homebrew/lib"
-        OTHER_LDFLAGS: "-lopenconnect"
-        SWIFT_OBJC_BRIDGING_HEADER: Extensions/CiscoTunnel/CiscoTunnel-Bridging-Header.h
-    dependencies:
-      - framework: NetworkExtension.framework
-      - framework: Security.framework

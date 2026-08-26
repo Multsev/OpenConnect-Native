@@ -36,7 +36,7 @@ final class AppModel {
         let service = VPNConnectionService(
             passwordStore: passwordStore,
             attemptGuard: attemptGuard,
-            tunnel: NetworkExtensionTunnelClient()
+            tunnel: OpenConnectProcessTunnelClient()
         )
         return AppModel(
             profileStore: profileStore,
