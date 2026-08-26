@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -119,14 +120,23 @@ struct RootView: View {
             Divider()
 
             HStack(spacing: 8) {
-                Button {
-                    showsNetworkInfo = true
+                Menu {
+                    Button("Сведения об адресах") {
+                        showsNetworkInfo = true
+                    }
+                    Divider()
+                    Button("Завершить приложение") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .disabled(model.status.canDisconnect)
                 } label: {
                     Image(systemName: "gearshape")
                 }
-                .buttonStyle(.borderless)
-                .help("Сведения об адресах")
-                .accessibilityLabel("Сведения об адресах")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Настройки")
+                .accessibilityLabel("Настройки")
 
                 if model.status.isBusy || model.isDiscoveringGroups {
                     ProgressView()
