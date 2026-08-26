@@ -7,12 +7,15 @@ source version.env
 mode=${1:-development}
 team_id=${TEAM_ID:-HW5E2337TG}
 build_root="$project_root/build"
+release_root="$project_root/Releases"
 app_path="$build_root/Release/CiscoConnect.app"
-dmg_path="$build_root/OpenConnect-Native-${MARKETING_VERSION}.dmg"
+dmg_path="$release_root/OpenConnect-Native-${MARKETING_VERSION}.dmg"
 
 ./Scripts/generate_app_icon.swift App/Resources/OpenConnectNative.icns App/Brand/OpenConnectNative-AppIcon.png
 ./Scripts/generate_xcode_project.sh
 rm -rf "$build_root"
+mkdir -p "$release_root"
+rm -f "$dmg_path" "$dmg_path.sha256"
 if [[ "$mode" == "release" ]]; then
   signing_identity=${SIGNING_IDENTITY:-}
   [[ -n "$signing_identity" ]] || { echo "Release requires SIGNING_IDENTITY='Developer ID Application: …'." >&2; exit 1; }
@@ -41,5 +44,21 @@ codesign --verify --deep --strict "$staging/OpenConnect Native.app"
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname "OpenConnect Native" -srcfolder "$staging" -ov -format UDZO "$dmg_path"
 shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
+
+# Verify the final renamed bundle from the disk image, then discard all
+# intermediate products. Releases remains the only user-facing output folder.
+verify_mount=$(mktemp -d /tmp/OpenConnectNativeVerify.XXXXXX)
+cleanup_verification() {
+  hdiutil detach "$verify_mount" >/dev/null 2>&1 || true
+  rmdir "$verify_mount" >/dev/null 2>&1 || true
+}
+trap cleanup_verification EXIT
+hdiutil attach -readonly -nobrowse -mountpoint "$verify_mount" "$dmg_path" >/dev/null
+codesign --verify --deep --strict "$verify_mount/OpenConnect Native.app"
+hdiutil detach "$verify_mount" >/dev/null
+rmdir "$verify_mount"
+trap - EXIT
+rm -rf "$build_root"
+
 echo "Created $dmg_path"
 [[ "$mode" != "release" ]] || echo "Notarize and staple this DMG before distribution."

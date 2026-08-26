@@ -56,13 +56,17 @@ cd /Users/max/Downloads/CiscoConnect
 ./Scripts/package_dmg.sh development
 ```
 
-Результат: `build/OpenConnect-Native-0.3.2.dmg` и файл контрольной суммы рядом с ним.
-Скрипт компилирует helper, вкладывает `libopenconnect` и динамические библиотеки
-в приложение и подписывает каждый компонент ad-hoc-подписью. Проверка:
+Готовые файлы всегда находятся только в папке `Releases`:
 
 ```bash
-codesign --verify --deep --strict build/Release/CiscoConnect.app
+Releases/OpenConnect-Native-0.3.2.dmg
+Releases/OpenConnect-Native-0.3.2.dmg.sha256
 ```
+
+Папка `build` используется только во время сборки и удаляется автоматически.
+Скрипт компилирует helper, вкладывает `libopenconnect` и динамические библиотеки,
+подписывает компоненты, монтирует готовый DMG для проверки и только затем
+помещает результат в `Releases`.
 
 ## Публикация на GitHub
 
@@ -100,6 +104,7 @@ Sources/CiscoConnect/
 App/Brand/            # PNG-превью фирменной иконки
 App/Resources/        # собранная ICNS-иконка приложения
 Scripts/             # XcodeGen, упаковка runtime и DMG
+Releases/            # единственное место с готовыми DMG и SHA-256
 Helper/              # привилегированный libopenconnect-движок и auth forms
 .github/workflows/   # CI и GitHub Releases
 Tests/               # доменные правила
