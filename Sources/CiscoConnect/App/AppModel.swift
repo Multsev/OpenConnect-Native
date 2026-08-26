@@ -10,6 +10,8 @@ final class AppModel {
     var status: TunnelStatus = .disconnected
     var errorMessage: String?
     var isSaving = false
+    @ObservationIgnored private var statusPollTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingPassword = ""
 
     private let profileStore: VPNProfileStore
     private let passwordStore: PasswordStore
@@ -34,7 +36,7 @@ final class AppModel {
         let service = VPNConnectionService(
             passwordStore: passwordStore,
             attemptGuard: attemptGuard,
-            tunnel: UnavailableTunnelClient()
+            tunnel: NetworkExtensionTunnelClient()
         )
         return AppModel(
             profileStore: profileStore,
@@ -76,14 +78,32 @@ final class AppModel {
                     passwordOverride: replacementPassword.isEmpty ? nil : replacementPassword,
                     otp: otp
                 )
-                if connectionService.status.state == .connected, !replacementPassword.isEmpty {
-                    try passwordStore.save(replacementPassword)
-                    password = ""
-                }
+                pendingPassword = replacementPassword
+                status = connectionService.status
+                pollTunnelStatus()
             }
         } catch {
             errorMessage = error.localizedDescription
         }
         status = connectionService.status
+    }
+
+    private func pollTunnelStatus() {
+        statusPollTask?.cancel()
+        statusPollTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                guard let updated = try? await self.connectionService.refreshStatus() else { return }
+                self.status = updated
+                if updated.state == .connected, !self.pendingPassword.isEmpty {
+                    try? self.passwordStore.save(self.pendingPassword)
+                    self.password = ""
+                    self.pendingPassword = ""
+                }
+                if !updated.isBusy { return }
+            }
+        }
     }
 }

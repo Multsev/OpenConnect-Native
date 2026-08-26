@@ -3,6 +3,7 @@ import Foundation
 protocol TunnelClient {
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus
     func disconnect() async throws -> TunnelStatus
+    func currentStatus() async throws -> TunnelStatus
 }
 
 /// Deliberately refuses to tunnel until a signed privileged transport is added.
@@ -14,5 +15,6 @@ struct UnavailableTunnelClient: TunnelClient {
     }
 
     func disconnect() async throws -> TunnelStatus { .disconnected }
-}
 
+    func currentStatus() async throws -> TunnelStatus { .disconnected }
+}

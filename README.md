@@ -1,6 +1,6 @@
 # CiscoConnect
 
-Нативный macOS-шаблон для Cisco AnyConnect-совместимых VPN. Шаблон
+Нативное macOS-приложение для Cisco AnyConnect-совместимых VPN. Оно
 демонстрирует подход «business logic first»: профиль, реквизиты, ограничения
 попыток и сценарий подключения независимы от SwiftUI; интерфейс строится
 системными `Form`, `NavigationSplitView`, `Table` и `ContentUnavailableView`.
@@ -18,14 +18,12 @@
   XML-формам `main:username`, `main:password`, `main:group_list` и
   `challenge:answer`.
 
-## Ограничение транспорта
+## Встроенный VPN-движок
 
-В репозитории намеренно нет привилегированного VPN-движка. Cisco AnyConnect SSL
-создаёт сетевой туннель и маршруты, поэтому рабочий macOS-транспорт должен быть
-отдельным подписанным Network Extension либо привилегированным helper вокруг
-OpenConnect. `UnavailableTunnelClient` сохраняет границу в коде и не передаёт
-пароль или OTP в аргументах командной строки. До установки такого транспорта
-приложение корректно объясняет, почему подключение не запущено.
+Приложение включает собственный Packet Tunnel system extension. Он вызывает
+`libopenconnect` напрямую и связывает её с `NEPacketTunnelFlow`; внешний
+исполняемый файл `openconnect` пользователю не нужен. Шлюз передаёт extension
+адрес, DNS и split-маршруты, а extension применяет их через NetworkExtension.
 
 OpenConnect поддерживает Cisco AnyConnect и рекомендует передавать пароль через
 stdin, а не через `--form-entry`; это важно, чтобы реквизиты не были видны в
@@ -40,10 +38,24 @@ stdin, а не через `--form-entry`; это важно, чтобы рекв
 
 ```bash
 cd /Users/max/Downloads/CiscoConnect
-swift run CiscoConnect
+./Scripts/generate_xcode_project.sh
+open CiscoConnect.xcodeproj
 ```
 
-## Проверка
+Для локальной проверки исходников без подписи:
+
+```bash
+xcodebuild -project CiscoConnect.xcodeproj -scheme CiscoConnect \
+  -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```
+
+Перед запуском реального VPN задайте `DEVELOPMENT_TEAM`, включите Network
+Extensions для идентификатора приложения в Apple Developer и добавьте
+универсальную сборку `libopenconnect` в `Vendor/OpenConnect`. Homebrew-библиотека
+на этом Mac используется только для компиляционной проверки и не предназначена
+для распространения.
+
+## Проверка доменной логики
 
 ```bash
 swift test
@@ -57,16 +69,15 @@ Sources/CiscoConnect/
 ├── App/             # запуск и сборка зависимостей
 ├── Domain/          # профиль, статус и запрос Cisco-формы
 ├── Persistence/     # UserDefaults, Keychain, сохранённый cooldown
-├── Services/        # use case подключения и транспортный контракт
+├── Services/        # use case подключения и NetworkExtension-клиент
 └── UI/              # декларативные системные экраны macOS
+Extensions/CiscoTunnel/ # Packet Tunnel + Objective-C мост libopenconnect
 Tests/               # правила профиля и защиты от повторных попыток
 ```
 
-## Подключение реального транспорта
+## Дистрибуция
 
-Реализуйте `TunnelClient` в отдельном модуле `Integrations/OpenConnect` или
-Network Extension. Он получает `CiscoAuthenticationRequest`, передаёт пароль и
-OTP только через защищённый IPC/stdin, проверяет сертификат шлюза, выдаёт
-события `TunnelStatus` и не выполняет автоматический повтор после отказа.
-`VPNConnectionService` и SwiftUI при этом менять не нужно.
-
+Перед внешним распространением зафиксируйте версию OpenConnect и её зависимости,
+соберите arm64/x86_64 runtime, подпишите сначала вложенные dylib, затем system
+extension и приложение, после чего выполните notarization. Подробности о
+структуре runtime — в `Vendor/OpenConnect/README.md`.
