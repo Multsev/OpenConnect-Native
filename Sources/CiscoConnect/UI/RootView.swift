@@ -3,8 +3,19 @@ import SwiftUI
 
 @MainActor
 struct RootView: View {
+    enum Presentation {
+        case window
+        case menuBar
+    }
+
     @Bindable var model: AppModel
+    @Binding var menuBarOnly: Bool
+    let presentation: Presentation
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(AppPresentationPreferences.menuBarIntroductionKey) private var didShowMenuBarIntroduction = false
     @State private var showsNetworkInfo = false
+    @State private var showsMenuBarIntroduction = false
 
     var body: some View {
         Group {
@@ -34,6 +45,20 @@ struct RootView: View {
             Button("Закрыть", role: .cancel) { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")
+        }
+        .alert("Приложение находится в строке меню", isPresented: $showsMenuBarIntroduction) {
+            Button("Понятно", role: .cancel) {}
+        } message: {
+            Text("OpenConnect Native также доступен по цветному значку в верхней строке macOS. Режим можно изменить через шестерёнку → «Только строка меню».")
+        }
+        .task {
+            guard presentation == .window else { return }
+            if menuBarOnly {
+                dismissWindow(id: "main")
+            } else if !didShowMenuBarIntroduction {
+                didShowMenuBarIntroduction = true
+                showsMenuBarIntroduction = true
+            }
         }
     }
 
@@ -124,6 +149,10 @@ struct RootView: View {
                     Button("Сведения об адресах") {
                         showsNetworkInfo = true
                     }
+                    Toggle("Только строка меню", isOn: Binding(
+                        get: { menuBarOnly },
+                        set: setMenuBarOnly
+                    ))
                     Divider()
                     Button("Завершить приложение") {
                         NSApplication.shared.terminate(nil)
@@ -200,5 +229,15 @@ struct RootView: View {
 
     private func submitOTP() {
         Task { await model.submitOTP() }
+    }
+
+    private func setMenuBarOnly(_ enabled: Bool) {
+        menuBarOnly = enabled
+        AppPresentationPreferences.applyActivationPolicy(menuBarOnly: enabled)
+        if enabled {
+            dismissWindow(id: "main")
+        } else {
+            openWindow(id: "main")
+        }
     }
 }
