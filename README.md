@@ -79,8 +79,8 @@ cd /Users/max/Downloads/CiscoConnect
 Готовые файлы всегда находятся только в папке `Releases`:
 
 ```bash
-Releases/OpenConnect-Native-0.4.0.dmg
-Releases/OpenConnect-Native-0.4.0.dmg.sha256
+Releases/OpenConnect-Native-0.4.1.dmg
+Releases/OpenConnect-Native-0.4.1.dmg.sha256
 ```
 
 Папка `build` используется только во время сборки и удаляется автоматически.
@@ -92,11 +92,11 @@ Releases/OpenConnect-Native-0.4.0.dmg.sha256
 
 Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
 собирает DMG на macOS 14. Pull request публикует артефакт проверки, а тег вида
-`v0.4.0` создаёт GitHub Release с DMG и SHA-256:
+`v0.4.1` создаёт GitHub Release с DMG и SHA-256:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 Никакой Apple Developer Program для этого не нужен. Однако ad-hoc подпись не
