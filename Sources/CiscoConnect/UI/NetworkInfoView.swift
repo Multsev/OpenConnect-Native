@@ -3,7 +3,10 @@ import SwiftUI
 struct NetworkInfoView: View {
     let networkInfo: VPNNetworkInfo
     let isConnected: Bool
+    let isSystemHelperInstalled: Bool
     let close: () -> Void
+    let removeSystemHelper: () -> Void
+    @State private var showsRemovalConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -27,8 +30,9 @@ struct NetworkInfoView: View {
 
             Divider()
 
-            if networkInfo.isAvailable {
-                ScrollView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if networkInfo.isAvailable {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(
                             routeSummary,
@@ -43,15 +47,28 @@ struct NetworkInfoView: View {
                         infoSection("Адрес VPN", values: networkInfo.vpnAddresses)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("Данные маршрутов появятся после подключения.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Divider()
+                    Button("Удалить системный компонент…", role: .destructive) {
+                        showsRemovalConfirmation = true
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!isSystemHelperInstalled)
+                    .help(isSystemHelperInstalled ? "Удалить helper и LaunchDaemon" : "Системный компонент не установлен")
                 }
-            } else {
-                ContentUnavailableView(
-                    "Данных пока нет",
-                    systemImage: "network.slash",
-                    description: Text("Подключитесь к VPN — адреса и домены появятся здесь автоматически.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .alert("Удалить системный компонент?", isPresented: $showsRemovalConfirmation) {
+            Button("Удалить", role: .destructive, action: removeSystemHelper)
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("VPN будет отключён. macOS один раз запросит пароль администратора и удалит helper и LaunchDaemon.")
         }
     }
 

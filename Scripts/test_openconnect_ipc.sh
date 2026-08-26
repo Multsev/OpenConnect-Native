@@ -3,7 +3,15 @@ set -euo pipefail
 
 app_path=${1:?Usage: test_openconnect_ipc.sh /path/to/CiscoConnect.app}
 helper="$app_path/Contents/Resources/OpenConnect/bin/CiscoConnectHelper"
+installer="$app_path/Contents/Resources/InstallPrivilegedHelper.sh"
+uninstaller="$app_path/Contents/Resources/UninstallPrivilegedHelper.sh"
+daemon_plist="$app_path/Contents/Resources/com.max.openconnectnative.helper.plist"
 [[ -x "$helper" ]] || { echo "CiscoConnectHelper was not built." >&2; exit 1; }
+[[ -x "$installer" && -x "$uninstaller" ]] || { echo "Privileged helper lifecycle scripts are missing." >&2; exit 1; }
+/bin/bash -n "$installer" "$uninstaller"
+/usr/bin/plutil -lint "$daemon_plist" >/dev/null
+/usr/bin/grep -Fq '/Library/PrivilegedHelperTools/com.max.openconnectnative.runtime' "$uninstaller"
+/usr/bin/grep -Fq '/Library/LaunchDaemons/com.max.openconnectnative.helper.plist' "$uninstaller"
 
 session_directory=$(mktemp -d /tmp/CiscoConnect-ipc-test.XXXXXX)
 cleanup() { rm -r "$session_directory"; }

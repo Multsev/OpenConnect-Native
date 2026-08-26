@@ -18,15 +18,18 @@ final class AppModel {
     private let profileStore: VPNProfileStore
     private let passwordStore: PasswordStore
     private let connectionService: VPNConnectionService
+    private let helperInstaller: PrivilegedHelperInstaller
 
     init(
         profileStore: VPNProfileStore,
         passwordStore: PasswordStore,
-        connectionService: VPNConnectionService
+        connectionService: VPNConnectionService,
+        helperInstaller: PrivilegedHelperInstaller
     ) {
         self.profileStore = profileStore
         self.passwordStore = passwordStore
         self.connectionService = connectionService
+        self.helperInstaller = helperInstaller
         profile = profileStore.load()
         status = connectionService.status
     }
@@ -35,19 +38,42 @@ final class AppModel {
         let profileStore = UserDefaultsVPNProfileStore()
         let passwordStore = KeychainPasswordStore()
         let attemptGuard = UserDefaultsAttemptGuard()
+        let helperConnection = PrivilegedHelperConnection()
+        let helperInstaller = PrivilegedHelperInstaller()
         let service = VPNConnectionService(
             passwordStore: passwordStore,
             attemptGuard: attemptGuard,
-            tunnel: OpenConnectProcessTunnelClient()
+            tunnel: OpenConnectProcessTunnelClient(
+                helperConnection: helperConnection,
+                helperInstaller: helperInstaller
+            )
         )
         return AppModel(
             profileStore: profileStore,
             passwordStore: passwordStore,
-            connectionService: service
+            connectionService: service,
+            helperInstaller: helperInstaller
         )
     }
 
     var hasStoredPassword: Bool { passwordStore.hasPassword }
+    var isSystemHelperInstalled: Bool { helperInstaller.isInstalled }
+
+    func uninstallSystemHelper() async {
+        errorMessage = nil
+        do {
+            statusPollTask?.cancel()
+            if status.canDisconnect {
+                try await connectionService.disconnect()
+            }
+            try await helperInstaller.uninstall()
+            status = .disconnected
+            networkInfo = .empty
+        } catch {
+            errorMessage = error.localizedDescription
+            status = connectionService.status
+        }
+    }
 
     func toggleConnection() async {
         errorMessage = nil
