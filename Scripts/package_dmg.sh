@@ -63,6 +63,7 @@ hdiutil detach "$verify_mount" >/dev/null
 rmdir "$verify_mount"
 trap - EXIT
 rm -rf "$build_root"
+./Scripts/prune_releases.sh local 2
 
 echo "Created $dmg_path"
 [[ "$mode" != "release" ]] || echo "Notarize and staple this DMG before distribution."
