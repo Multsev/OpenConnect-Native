@@ -34,10 +34,14 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSNumber *sessionExpiration;
 @property NSNumber *idleTimeoutSeconds;
 @property NSString *serverMessage;
+@property NSString *interfaceName;
+@property BOOL systemConfigurationApplied;
 @property dispatch_source_t statsTimer;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
 - (BOOL)systemConfigurationIsReady;
+- (BOOL)applyScopedSystemConfiguration;
+- (void)removeScopedSystemConfiguration;
 - (void)handleProgressMessage:(NSString *)message;
 - (void)updateTrafficStats:(const struct oc_stats *)stats;
 @end
@@ -257,12 +261,79 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     NSDictionary *ipv4State = CFBridgingRelease(SCDynamicStoreCopyValue(NULL, (__bridge CFStringRef)ipv4Key));
     NSArray *activeDNS = [dnsState[@"ServerAddresses"] isKindOfClass:NSArray.class] ? dnsState[@"ServerAddresses"] : @[];
     NSArray *activeAddresses = [ipv4State[@"Addresses"] isKindOfClass:NSArray.class] ? ipv4State[@"Addresses"] : @[];
+    NSArray *activeDomains = [dnsState[@"SupplementalMatchDomains"] isKindOfClass:NSArray.class] ? dnsState[@"SupplementalMatchDomains"] : @[];
     NSArray *expectedDNS = self.networkInfo[@"dnsServers"] ?: @[];
     NSArray *expectedAddresses = self.networkInfo[@"vpnAddresses"] ?: @[];
+    NSArray *expectedDomains = self.networkInfo[@"domains"] ?: @[];
 
     for (NSString *server in expectedDNS) if (![activeDNS containsObject:server]) return NO;
     for (NSString *address in expectedAddresses) if (![activeAddresses containsObject:address]) return NO;
+    for (NSString *domain in expectedDomains) if (![activeDomains containsObject:domain]) return NO;
     return expectedDNS.count == 0 || activeDNS.count > 0;
+}
+
+- (BOOL)applyScopedSystemConfiguration {
+    self.interfaceName = stringValue(openconnect_get_ifname(self.vpn));
+    if (!self.interfaceName.length) return NO;
+
+    NSArray *dnsServers = self.networkInfo[@"dnsServers"] ?: @[];
+    NSArray *domains = self.networkInfo[@"domains"] ?: @[];
+    NSArray *vpnAddresses = self.networkInfo[@"vpnAddresses"] ?: @[];
+    NSArray *includedRoutes = self.networkInfo[@"includedRoutes"] ?: @[];
+    NSString *ipv4Address = nil;
+    for (NSString *address in vpnAddresses) {
+        if (![address containsString:@":"]) { ipv4Address = address; break; }
+    }
+    if (!ipv4Address.length) return NO;
+
+    SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("OpenConnect Native"), NULL, NULL);
+    if (!store) return NO;
+    NSString *dnsKey = [NSString stringWithFormat:@"State:/Network/Service/%@/DNS", self.interfaceName];
+    NSString *ipv4Key = [NSString stringWithFormat:@"State:/Network/Service/%@/IPv4", self.interfaceName];
+
+    NSMutableDictionary *dnsState = [NSMutableDictionary dictionary];
+    if (dnsServers.count) dnsState[@"ServerAddresses"] = dnsServers;
+    if (domains.count) {
+        dnsState[@"DomainName"] = domains.firstObject;
+        dnsState[@"SearchDomains"] = domains;
+        dnsState[@"SupplementalMatchDomains"] = domains;
+    }
+
+    NSMutableDictionary *ipv4State = [@{
+        @"Addresses": @[ipv4Address],
+        @"SubnetMasks": @[@"255.255.255.255"],
+        @"InterfaceName": self.interfaceName
+    } mutableCopy];
+    if (includedRoutes.count == 0) {
+        ipv4State[@"Router"] = ipv4Address;
+        ipv4State[@"OverridePrimary"] = @YES;
+    } else if (domains.count == 0 && dnsServers.count) {
+        // A split route without match domains still needs the VPN resolver to
+        // become primary; otherwise there is no safe domain-based selection.
+        ipv4State[@"OverridePrimary"] = @YES;
+    }
+
+    BOOL dnsApplied = dnsServers.count == 0 || SCDynamicStoreSetValue(
+        store, (__bridge CFStringRef)dnsKey, (__bridge CFDictionaryRef)dnsState
+    );
+    BOOL ipv4Applied = SCDynamicStoreSetValue(
+        store, (__bridge CFStringRef)ipv4Key, (__bridge CFDictionaryRef)ipv4State
+    );
+    CFRelease(store);
+    self.systemConfigurationApplied = dnsApplied && ipv4Applied;
+    return self.systemConfigurationApplied;
+}
+
+- (void)removeScopedSystemConfiguration {
+    if (!self.interfaceName.length) return;
+    SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("OpenConnect Native"), NULL, NULL);
+    if (!store) return;
+    NSString *dnsKey = [NSString stringWithFormat:@"State:/Network/Service/%@/DNS", self.interfaceName];
+    NSString *ipv4Key = [NSString stringWithFormat:@"State:/Network/Service/%@/IPv4", self.interfaceName];
+    SCDynamicStoreRemoveValue(store, (__bridge CFStringRef)dnsKey);
+    SCDynamicStoreRemoveValue(store, (__bridge CFStringRef)ipv4Key);
+    CFRelease(store);
+    self.systemConfigurationApplied = NO;
 }
 
 - (NSArray *)groupsFromForm:(struct oc_auth_form *)form {
@@ -491,6 +562,10 @@ static int runRequest(NSDictionary *originalRequest) {
         [session writeState:@"failed" message:@"Could not create the macOS VPN interface" groups:@[]];
         result = 75; goto finished;
     }
+    if (![session applyScopedSystemConfiguration]) {
+        [session writeState:@"failed" message:@"macOS не применила изолированную DNS-конфигурацию VPN" groups:@[]];
+        result = 76; goto finished;
+    }
     BOOL configurationReady = NO;
     for (int check = 0; check < 20 && !configurationReady; check++) {
         configurationReady = [session systemConfigurationIsReady];
@@ -498,7 +573,7 @@ static int runRequest(NSDictionary *originalRequest) {
     }
     if (!configurationReady) {
         [session writeState:@"failed" message:@"macOS не применила VPN-адрес или корпоративные DNS" groups:@[]];
-        result = 76; goto finished;
+        result = 77; goto finished;
     }
     openconnect_setup_dtls(session.vpn, 60);
     [session writeState:@"connected" message:@"VPN connected" groups:@[]];
@@ -511,7 +586,7 @@ static int runRequest(NSDictionary *originalRequest) {
     } else {
         NSString *message = [NSString stringWithFormat:@"VPN-соединение прервано; автоматическое восстановление не удалось (код OpenConnect: %d)", mainloopResult];
         [session writeState:@"failed" message:message groups:@[]];
-        result = mainloopResult ?: 77;
+        result = mainloopResult ?: 78;
     }
 
 finished:
@@ -520,6 +595,7 @@ finished:
         session.statsTimer = nil;
     }
     if (session.vpn) openconnect_vpninfo_free(session.vpn);
+    [session removeScopedSystemConfiguration];
     session.vpn = NULL;
     activeSession = nil;
     NSNumber *peerUID = request[@"peerUID"];

@@ -42,7 +42,10 @@ AnyConnect используются только для описания сов�
   кратковременном сетевом сбое. GUI продолжает контролировать helper всё время
   соединения и показывает причину, если восстановить VPN не удалось;
 - статус «Подключено» появляется только после того, как macOS применила
-  выданный VPN-адрес и корпоративные DNS-серверы;
+  выданный VPN-адрес, корпоративные DNS-серверы и все split-DNS-домены;
+- DNS применяется нативно только к интерфейсу OpenConnect: приложение не
+  изменяет DNS Wi-Fi и других одновременно работающих VPN. Все домены из
+  `CISCO_SPLIT_DNS` получают отдельное правило macOS Supplemental Match Domain;
 - если шлюз передал срок авторизации, helper получает его через
   `openconnect_get_auth_expiration()`, а компактная строка состояния показывает
   оставшееся время. За 15 и 5 минут macOS предупреждает о завершении сеанса;
@@ -125,8 +128,8 @@ cd /Users/max/Downloads/CiscoConnect
 Готовые файлы всегда находятся только в папке `Releases`:
 
 ```bash
-Releases/OpenConnect-Native-0.7.5.dmg
-Releases/OpenConnect-Native-0.7.5.dmg.sha256
+Releases/OpenConnect-Native-0.7.6.dmg
+Releases/OpenConnect-Native-0.7.6.dmg.sha256
 ```
 
 Папка `build` используется только во время сборки и удаляется автоматически.
@@ -147,11 +150,11 @@ workflow использует `development` с ad-hoc подписью; така
 
 Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
 собирает DMG на macOS 14. Pull request публикует артефакт проверки, а тег вида
-`v0.7.5` создаёт GitHub Release с DMG и SHA-256:
+`v0.7.6` создаёт GitHub Release с DMG и SHA-256:
 
 ```bash
-git tag v0.7.5
-git push origin v0.7.5
+git tag v0.7.6
+git push origin v0.7.6
 ```
 
 После публикации workflow сохраняет только два последних GitHub Release.
