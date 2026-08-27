@@ -92,7 +92,14 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             throw VPNError.helperFailure("VPN helper завершился до создания соединения")
         }
         switch snapshot.state {
-        case "connected": return TunnelStatus(state: .connected, message: snapshot.message, attemptID: attemptID, networkInfo: snapshot.networkInfo)
+        case "connected":
+            return TunnelStatus(
+                state: .connected,
+                message: snapshot.message,
+                attemptID: attemptID,
+                networkInfo: snapshot.networkInfo,
+                sessionPolicy: snapshot.sessionPolicy
+            )
         case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID)
         case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID)
         case "authenticationFailed":
@@ -101,6 +108,15 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         case "failed":
             cleanUp()
             throw VPNError.helperFailure(snapshot.message)
+        case "sessionExpired":
+            cleanUp()
+            return TunnelStatus(
+                state: .sessionExpired,
+                message: snapshot.message,
+                attemptID: attemptID,
+                networkInfo: snapshot.networkInfo,
+                sessionPolicy: snapshot.sessionPolicy
+            )
         case "disconnected": cleanUp(); return .disconnected
         default: return TunnelStatus(state: .connecting, message: snapshot.message, attemptID: attemptID)
         }
@@ -142,7 +158,11 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             state: dictionary["state"] as? String ?? "failed",
             message: dictionary["message"] as? String ?? "VPN helper failed",
             groups: groups,
-            networkInfo: VPNNetworkInfo(propertyList: dictionary["networkInfo"] as? [String: Any])
+            networkInfo: VPNNetworkInfo(propertyList: dictionary["networkInfo"] as? [String: Any]),
+            sessionPolicy: VPNSessionPolicy(
+                expirationTimestamp: (dictionary["sessionExpiration"] as? NSNumber)?.doubleValue,
+                idleTimeout: (dictionary["idleTimeoutSeconds"] as? NSNumber)?.doubleValue
+            )
         )
     }
 
@@ -183,4 +203,5 @@ private struct HelperSnapshot {
     let message: String
     let groups: [VPNGroup]
     let networkInfo: VPNNetworkInfo
+    let sessionPolicy: VPNSessionPolicy
 }

@@ -37,7 +37,7 @@ struct VPNProfile: Codable, Equatable, Sendable {
 }
 
 enum TunnelState: String, Sendable {
-    case disconnected, connecting, authenticating, otpRequired, connected, disconnecting, failed
+    case disconnected, connecting, authenticating, otpRequired, connected, disconnecting, sessionExpired, failed
 
     var isBusy: Bool {
         self == .connecting || self == .authenticating || self == .otpRequired || self == .disconnecting
@@ -53,6 +53,7 @@ struct TunnelStatus: Equatable, Sendable {
     var message: String
     var attemptID: UUID?
     var networkInfo: VPNNetworkInfo = .empty
+    var sessionPolicy: VPNSessionPolicy = .empty
 
     static let disconnected = TunnelStatus(state: .disconnected, message: "VPN disconnected", attemptID: nil)
 

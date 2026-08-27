@@ -12,6 +12,14 @@ daemon_plist="$app_path/Contents/Resources/com.max.openconnectnative.helper.plis
   echo "Helper is missing SystemConfiguration runtime checks." >&2
   exit 1
 }
+/usr/bin/nm -u "$helper" | /usr/bin/grep -Fq '_openconnect_get_auth_expiration' || {
+  echo "Helper does not read the server session expiration." >&2
+  exit 1
+}
+/usr/bin/nm -u "$helper" | /usr/bin/grep -Fq '_openconnect_get_idle_timeout' || {
+  echo "Helper does not read the server idle timeout." >&2
+  exit 1
+}
 /bin/bash -n "$installer" "$uninstaller"
 /usr/bin/plutil -lint "$daemon_plist" >/dev/null
 /usr/bin/grep -Fq '/Library/PrivilegedHelperTools/com.max.openconnectnative.runtime' "$uninstaller"

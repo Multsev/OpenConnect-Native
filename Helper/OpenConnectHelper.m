@@ -27,6 +27,8 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSTimeInterval deadline;
 @property int commandFD;
 @property NSDictionary *networkInfo;
+@property NSNumber *sessionExpiration;
+@property NSNumber *idleTimeoutSeconds;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
 - (BOOL)systemConfigurationIsReady;
@@ -59,10 +61,12 @@ static void progress_callback(void *data, int level, const char *format, ...) {
 @implementation HelperSession
 
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups {
-    NSDictionary *payload = @{
+    NSMutableDictionary *payload = [@{
         @"state": state, @"message": message, @"groups": groups,
         @"networkInfo": self.networkInfo ?: @{}
-    };
+    } mutableCopy];
+    if (self.sessionExpiration) payload[@"sessionExpiration"] = self.sessionExpiration;
+    if (self.idleTimeoutSeconds) payload[@"idleTimeoutSeconds"] = self.idleTimeoutSeconds;
     NSString *temporary = [self.statusPath stringByAppendingString:@".new"];
     [payload writeToFile:temporary atomically:YES];
     chmod(temporary.fileSystemRepresentation, 0644);
@@ -316,6 +320,10 @@ static int runRequest(NSDictionary *originalRequest) {
         [session writeState:@"failed" message:@"Could not establish the encrypted VPN channel" groups:@[]];
         result = 74; goto finished;
     }
+    time_t authExpiration = openconnect_get_auth_expiration(session.vpn);
+    int idleTimeout = openconnect_get_idle_timeout(session.vpn);
+    if (authExpiration > 0) session.sessionExpiration = @((long long)authExpiration);
+    if (idleTimeout > 0) session.idleTimeoutSeconds = @(idleTimeout);
     session.networkInfo = [session networkInfoFromVPN];
     if (openconnect_setup_tun_device(session.vpn, [request[@"vpncScript"] UTF8String], NULL)) {
         [session writeState:@"failed" message:@"Could not create the macOS VPN interface" groups:@[]];
@@ -335,6 +343,8 @@ static int runRequest(NSDictionary *originalRequest) {
     int mainloopResult = openconnect_mainloop(session.vpn, 300, RECONNECT_INTERVAL_MIN);
     if (session.disconnectRequested) {
         [session writeState:@"disconnected" message:@"VPN отключён пользователем" groups:@[]];
+    } else if (session.sessionExpiration && NSDate.date.timeIntervalSince1970 >= session.sessionExpiration.doubleValue) {
+        [session writeState:@"sessionExpired" message:@"Срок VPN-сеанса истёк" groups:@[]];
     } else {
         NSString *message = [NSString stringWithFormat:@"VPN-соединение прервано; автоматическое восстановление не удалось (код OpenConnect: %d)", mainloopResult];
         [session writeState:@"failed" message:message groups:@[]];

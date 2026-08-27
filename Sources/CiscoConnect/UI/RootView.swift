@@ -23,6 +23,7 @@ struct RootView: View {
             if showsNetworkInfo {
                 NetworkInfoView(
                     networkInfo: model.networkInfo,
+                    sessionPolicy: model.status.sessionPolicy,
                     isConnected: model.status.state == .connected,
                     close: { showsNetworkInfo = false }
                 )
@@ -179,13 +180,16 @@ struct RootView: View {
                         .controlSize(.small)
                 } else {
                     Circle()
-                        .fill(model.status.state == .connected ? Color.green : Color.secondary.opacity(0.5))
+                        .fill(statusIndicatorColor)
                         .frame(width: 7, height: 7)
                 }
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(statusText(at: context.date))
+                        .font(.caption)
+                        .foregroundStyle(statusColor(at: context.date))
+                        .lineLimit(1)
+                        .accessibilityLabel(statusAccessibilityLabel(at: context.date))
+                }
                 Spacer(minLength: 8)
                 Button(model.status.canDisconnect ? "Отключиться" : "Подключиться") {
                     Task { await model.toggleConnection() }
@@ -211,15 +215,56 @@ struct RootView: View {
         model.status.isBusy || model.isDiscoveringGroups || model.profile.normalized().gateway.isEmpty
     }
 
-    private var statusText: String {
+    private func statusText(at date: Date) -> String {
         if model.isDiscoveringGroups { return "Получение групп…" }
         switch model.status.state {
         case .disconnected: return "Отключено"
         case .connecting, .authenticating: return "Подключение…"
         case .otpRequired: return "Введите OTP"
-        case .connected: return "Подключено"
+        case .connected:
+            if model.status.sessionPolicy.hasExpired(at: date) { return "Сеанс завершается…" }
+            guard let remaining = model.status.sessionPolicy.remainingDescription(at: date) else { return "Подключено" }
+            return "Подключено · \(remaining)"
         case .disconnecting: return "Отключение…"
+        case .sessionExpired: return "Сеанс завершён"
         case .failed: return "Ошибка подключения"
+        }
+    }
+
+    private func statusColor(at date: Date) -> Color {
+        switch model.status.state {
+        case .sessionExpired, .failed:
+            return .red
+        case .connected where model.status.sessionPolicy.hasExpired(at: date):
+            return .orange
+        case .connected where model.status.sessionPolicy.isExpiringSoon(at: date):
+            return .orange
+        default:
+            return .secondary
+        }
+    }
+
+    private var statusIndicatorColor: Color {
+        switch model.status.state {
+        case .connected:
+            return .green
+        case .sessionExpired, .failed:
+            return .red
+        default:
+            return .secondary.opacity(0.5)
+        }
+    }
+
+    private func statusAccessibilityLabel(at date: Date) -> String {
+        switch model.status.state {
+        case .connected:
+            if model.status.sessionPolicy.hasExpired(at: date) { return "Срок VPN-сеанса истёк, ожидается завершение подключения" }
+            guard let remaining = model.status.sessionPolicy.remainingDescription(at: date) else { return "VPN подключён" }
+            return "VPN подключён, до завершения сеанса осталось \(remaining)"
+        case .sessionExpired:
+            return "Срок VPN-сеанса истёк"
+        default:
+            return statusText(at: date)
         }
     }
 
