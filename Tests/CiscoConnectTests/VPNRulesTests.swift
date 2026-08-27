@@ -2,6 +2,33 @@ import XCTest
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testHelperAvailabilityWaiterRecoversFromLaunchRace() async throws {
+        let waiter = HelperAvailabilityWaiter(attempts: 3, retryDelay: .zero)
+        var pingCount = 0
+
+        try await waiter.waitUntilAvailable {
+            pingCount += 1
+            if pingCount == 1 { throw VPNError.helperFailure("listener is starting") }
+        }
+
+        XCTAssertEqual(pingCount, 2)
+    }
+
+    func testHelperAvailabilityWaiterStopsAfterLimit() async {
+        let waiter = HelperAvailabilityWaiter(attempts: 3, retryDelay: .zero)
+        var pingCount = 0
+
+        do {
+            try await waiter.waitUntilAvailable {
+                pingCount += 1
+                throw VPNError.helperFailure("unavailable")
+            }
+            XCTFail("Expected the helper availability check to fail")
+        } catch {
+            XCTAssertEqual(pingCount, 3)
+        }
+    }
+
     func testProfileNormalizesGatewayAndValidatesPassword() {
         let profile = VPNProfile(gateway: " vpn.example.test/ ", group: " staff ", username: " max ")
 

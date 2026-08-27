@@ -22,7 +22,7 @@ struct ConnectionDetailsView: View {
             Divider()
             content
         }
-        .tint(OpenConnectPalette.blue)
+        .tint(OpenConnectPalette.accent)
     }
 
     private var header: some View {
@@ -312,6 +312,6 @@ private struct DetailValuesSection: View {
 }
 
 enum OpenConnectPalette {
-    static let blue = Color(red: 0.10, green: 0.60, blue: 0.78)
-    static let green = Color(red: 0.18, green: 0.84, blue: 0.45)
+    static let accent = Color(nsColor: .systemGreen)
+    static let green = accent
 }

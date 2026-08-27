@@ -17,19 +17,44 @@ enum AppPresentationPreferences {
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
     }
-}
 
-final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        UNUserNotificationCenter.current().delegate = self
-        Task { @MainActor in
-            AppPresentationPreferences.applyActivationPolicy(
-                menuBarOnly: AppPresentationPreferences.isMenuBarOnly
-            )
-        }
+    @MainActor
+    static func hideMainWindow() {
+        mainWindow?.orderOut(nil)
     }
 
-    func userNotificationCenter(
+    @MainActor
+    static func showMainWindow() {
+        applyActivationPolicy(menuBarOnly: false)
+        mainWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @MainActor
+    private static var mainWindow: NSWindow? {
+        NSApplication.shared.windows.first { window in
+            window.title == "OpenConnect Native" && !(window is NSPanel)
+        }
+    }
+}
+
+@MainActor
+final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    let appModel = AppModel.makeLive()
+    private var menuBarPopoverController: MenuBarPopoverController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
+        AppPresentationPreferences.applyActivationPolicy(
+            menuBarOnly: AppPresentationPreferences.isMenuBarOnly
+        )
+        menuBarPopoverController = MenuBarPopoverController(model: appModel)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void

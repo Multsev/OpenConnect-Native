@@ -21,6 +21,19 @@ if [[ "$mode" == "release" ]]; then
   [[ -n "$signing_identity" ]] || { echo "Release requires SIGNING_IDENTITY='Developer ID Application: …'." >&2; exit 1; }
   codesign_arguments=(--force --options runtime --sign "$signing_identity")
   xcodebuild -project CiscoConnect.xcodeproj -scheme CiscoConnect -configuration Release -derivedDataPath "$build_root/DerivedData" DEVELOPMENT_TEAM="$team_id" build
+elif [[ "$mode" == "local" ]]; then
+  signing_identity=${SIGNING_IDENTITY:-$(/usr/bin/security find-identity -v -p codesigning \
+    | /usr/bin/sed -n 's/.*"\(Apple Development:.*\)"/\1/p' \
+    | /usr/bin/head -n 1)}
+  [[ -n "$signing_identity" ]] || {
+    echo "Local build requires an Apple Development signing identity from Xcode." >&2
+    exit 1
+  }
+  # A free Apple Development certificate gives this Mac a stable designated
+  # requirement across GUI-only builds. The root helper can therefore keep
+  # trusting updates without being reinstalled for every changed CDHash.
+  codesign_arguments=(--force --options runtime --timestamp=none --sign "$signing_identity")
+  xcodebuild -project CiscoConnect.xcodeproj -scheme CiscoConnect -configuration Release -derivedDataPath "$build_root/DerivedData" CODE_SIGNING_ALLOWED=NO build
 else
   signing_identity="-"
   # Hardened Runtime library validation cannot be used with an ad-hoc signature:

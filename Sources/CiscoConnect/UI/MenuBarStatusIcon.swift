@@ -52,13 +52,13 @@ struct MenuBarStatusIcon: View {
     }
 
     var body: some View {
-        Image(nsImage: menuBarImage)
+        Image(nsImage: Self.image(for: tunnelState))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(appearance.accessibilityLabel)
     }
 
-    private var menuBarImage: NSImage {
-        let appearance = appearance
+    static func image(for tunnelState: TunnelState) -> NSImage {
+        let appearance = MenuBarIconAppearance(tunnelState: tunnelState)
         let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { rect in
             let path = OpenConnectMenuBarMark.path(in: rect.insetBy(dx: 1, dy: 1))
             let context = NSGraphicsContext.current?.cgContext
