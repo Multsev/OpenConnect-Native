@@ -56,8 +56,18 @@ cleanup_verification() {
   hdiutil detach "$verify_mount" >/dev/null 2>&1 || true
   rmdir "$verify_mount" >/dev/null 2>&1 || true
 }
+attach_for_verification() {
+  local attempt
+  for attempt in 1 2 3; do
+    if hdiutil attach -readonly -nobrowse -mountpoint "$verify_mount" "$dmg_path" >/dev/null; then
+      return 0
+    fi
+    [[ $attempt == 3 ]] || sleep 1
+  done
+  return 1
+}
 trap cleanup_verification EXIT
-hdiutil attach -readonly -nobrowse -mountpoint "$verify_mount" "$dmg_path" >/dev/null
+attach_for_verification
 codesign --verify --deep --strict "$verify_mount/OpenConnect Native.app"
 hdiutil detach "$verify_mount" >/dev/null
 rmdir "$verify_mount"

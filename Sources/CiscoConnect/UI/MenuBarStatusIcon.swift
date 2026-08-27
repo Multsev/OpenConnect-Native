@@ -5,6 +5,7 @@ enum MenuBarIconAppearance: Equatable {
     case offline
     case working
     case online
+    case expired
     case error
 
     init(tunnelState: TunnelState) {
@@ -15,6 +16,8 @@ enum MenuBarIconAppearance: Equatable {
             self = .working
         case .connected:
             self = .online
+        case .sessionExpired:
+            self = .expired
         case .failed:
             self = .error
         }
@@ -25,7 +28,7 @@ enum MenuBarIconAppearance: Equatable {
         case .offline: .secondaryLabelColor
         case .working: .systemYellow
         case .online: .systemGreen
-        case .error: .systemRed
+        case .expired, .error: .systemRed
         }
     }
 
@@ -34,6 +37,7 @@ enum MenuBarIconAppearance: Equatable {
         case .offline: "OpenConnect Native: отключено"
         case .working: "OpenConnect Native: подключение"
         case .online: "OpenConnect Native: подключено"
+        case .expired: "OpenConnect Native: срок сеанса истёк"
         case .error: "OpenConnect Native: ошибка соединения"
         }
     }

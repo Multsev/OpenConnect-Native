@@ -18,7 +18,20 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(MenuBarIconAppearance(tunnelState: .otpRequired), .working)
         XCTAssertEqual(MenuBarIconAppearance(tunnelState: .disconnecting), .working)
         XCTAssertEqual(MenuBarIconAppearance(tunnelState: .connected), .online)
+        XCTAssertEqual(MenuBarIconAppearance(tunnelState: .sessionExpired), .expired)
         XCTAssertEqual(MenuBarIconAppearance(tunnelState: .failed), .error)
+    }
+
+    func testSessionPolicyFormatsServerLimitsAndWarningThreshold() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let expiration = now.addingTimeInterval(2 * 60 * 60 + 58 * 60 + 30)
+        let policy = VPNSessionPolicy(expirationDate: expiration, idleTimeout: 30 * 60)
+
+        XCTAssertEqual(policy.remainingDescription(at: now), "2 ч 58 мин")
+        XCTAssertEqual(policy.idleTimeoutDescription, "30 мин")
+        XCTAssertFalse(policy.isExpiringSoon(at: now))
+        XCTAssertTrue(policy.isExpiringSoon(at: expiration.addingTimeInterval(-10 * 60)))
+        XCTAssertTrue(policy.hasExpired(at: expiration))
     }
 
     func testNetworkInfoReadsAndNormalizesHelperPayload() {
@@ -142,6 +155,51 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionExpirationIsShownWithoutAuthenticationFailure() async throws {
+        let tunnel = RecordingTunnelClient()
+        let passwordStore = MemoryPasswordStore(password: "secret")
+        let attemptGuard = RecordingAttemptGuard()
+        let notifier = RecordingSessionExpirationNotifier()
+        let service = VPNConnectionService(
+            passwordStore: passwordStore,
+            attemptGuard: attemptGuard,
+            tunnel: tunnel
+        )
+        let model = AppModel(
+            profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")),
+            passwordStore: passwordStore,
+            connectionService: service,
+            helperInstaller: PrivilegedHelperInstaller(),
+            sessionExpirationNotifier: notifier,
+            statusPollInterval: .milliseconds(10)
+        )
+        let expiration = Date().addingTimeInterval(3 * 60 * 60)
+
+        await model.toggleConnection()
+        tunnel.status = TunnelStatus(
+            state: .connected,
+            message: "VPN connected",
+            attemptID: tunnel.attemptID,
+            sessionPolicy: VPNSessionPolicy(expirationDate: expiration)
+        )
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(notifier.scheduledExpirations, [expiration])
+
+        tunnel.status = TunnelStatus(
+            state: .sessionExpired,
+            message: "Срок VPN-сеанса истёк",
+            attemptID: tunnel.attemptID,
+            sessionPolicy: VPNSessionPolicy(expirationDate: expiration)
+        )
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(model.status.state, .sessionExpired)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertTrue(attemptGuard.recordedAttemptIDs.isEmpty)
+    }
+
+    @MainActor
     func testRefreshGroupsUsesDiscoveryWithoutStartingConnection() async {
         let tunnel = RecordingTunnelClient()
         tunnel.discoveredGroups = [
@@ -194,6 +252,20 @@ private final class RecordingAttemptGuard: AttemptGuard {
         return now.addingTimeInterval(60)
     }
     func resetAfterSuccess() {}
+}
+
+@MainActor
+private final class RecordingSessionExpirationNotifier: SessionExpirationNotifying {
+    var scheduledExpirations: [Date] = []
+    var cancellationCount = 0
+
+    func schedule(expiration: Date) async {
+        scheduledExpirations.append(expiration)
+    }
+
+    func cancel() {
+        cancellationCount += 1
+    }
 }
 
 @MainActor

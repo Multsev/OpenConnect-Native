@@ -14,27 +14,32 @@ final class AppModel {
     var errorMessage: String?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPassword = ""
+    @ObservationIgnored private var scheduledExpiration: Date?
     @ObservationIgnored private let statusPollInterval: Duration
 
     private let profileStore: VPNProfileStore
     private let passwordStore: PasswordStore
     private let connectionService: VPNConnectionService
     private let helperInstaller: PrivilegedHelperInstaller
+    private let sessionExpirationNotifier: SessionExpirationNotifying
 
     init(
         profileStore: VPNProfileStore,
         passwordStore: PasswordStore,
         connectionService: VPNConnectionService,
         helperInstaller: PrivilegedHelperInstaller,
+        sessionExpirationNotifier: SessionExpirationNotifying? = nil,
         statusPollInterval: Duration = .seconds(1)
     ) {
         self.profileStore = profileStore
         self.passwordStore = passwordStore
         self.connectionService = connectionService
         self.helperInstaller = helperInstaller
+        self.sessionExpirationNotifier = sessionExpirationNotifier ?? NoopSessionExpirationNotifier()
         self.statusPollInterval = statusPollInterval
         profile = profileStore.load()
         status = connectionService.status
+        self.sessionExpirationNotifier.cancel()
     }
 
     static func makeLive() -> AppModel {
@@ -55,7 +60,8 @@ final class AppModel {
             profileStore: profileStore,
             passwordStore: passwordStore,
             connectionService: service,
-            helperInstaller: helperInstaller
+            helperInstaller: helperInstaller,
+            sessionExpirationNotifier: UserNotificationSessionExpirationNotifier()
         )
     }
 
@@ -66,6 +72,7 @@ final class AppModel {
         errorMessage = nil
         do {
             statusPollTask?.cancel()
+            cancelSessionNotifications()
             if status.canDisconnect {
                 try await connectionService.disconnect()
             }
@@ -83,7 +90,9 @@ final class AppModel {
         do {
             if status.canDisconnect {
                 try await connectionService.disconnect()
+                cancelSessionNotifications()
             } else {
+                cancelSessionNotifications()
                 if profile.group.isEmpty, availableGroups.isEmpty {
                     isDiscoveringGroups = true
                     defer { isDiscoveringGroups = false }
@@ -163,6 +172,7 @@ final class AppModel {
                 catch {
                     self.status = self.connectionService.status
                     self.errorMessage = error.localizedDescription
+                    self.cancelSessionNotifications()
                     return
                 }
                 self.status = updated
@@ -174,19 +184,34 @@ final class AppModel {
                     self.password = ""
                     self.pendingPassword = ""
                 }
+                if updated.state == .connected,
+                   let expiration = updated.sessionPolicy.expirationDate,
+                   expiration != self.scheduledExpiration {
+                    self.scheduledExpiration = expiration
+                    await self.sessionExpirationNotifier.schedule(expiration: expiration)
+                }
                 switch updated.state {
                 case .connecting, .authenticating, .otpRequired, .connected:
                     continue
                 case .disconnected:
+                    self.cancelSessionNotifications()
                     if updated.message != TunnelStatus.disconnected.message,
                        updated.message != "VPN отключён пользователем" {
                         self.errorMessage = updated.message
                     }
                     return
+                case .sessionExpired:
+                    return
                 case .disconnecting, .failed:
+                    self.cancelSessionNotifications()
                     return
                 }
             }
         }
+    }
+
+    private func cancelSessionNotifications() {
+        scheduledExpiration = nil
+        sessionExpirationNotifier.cancel()
     }
 }
