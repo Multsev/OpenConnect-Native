@@ -4,20 +4,24 @@ set -euo pipefail
 # Creates a self-contained OpenConnect runtime inside the unsigned/ad-hoc app.
 # This intentionally uses the developer's local Homebrew installation; a public
 # release must be rebuilt for each supported architecture.
+project_root=$(cd "$(dirname "$0")/.." && pwd)
 app_path=${1:?"Pass the built CiscoConnect.app path."}
 homebrew_prefix=${HOMEBREW_PREFIX:-$(brew --prefix)}
 openconnect_prefix=${OPENCONNECT_PREFIX:-$(brew --prefix openconnect)}
 vpnc_script=${VPNC_SCRIPT:-"$homebrew_prefix/etc/vpnc/vpnc-script"}
+vpnc_wrapper="$project_root/App/Resources/OpenConnectVPNScript.sh"
 license_file=${OPENCONNECT_LICENSE:-"$openconnect_prefix/COPYING.LGPL"}
 [[ -x "$vpnc_script" ]] || { echo "vpnc-script not found: $vpnc_script" >&2; exit 1; }
+[[ -x "$vpnc_wrapper" ]] || { echo "OpenConnect DNS-safe wrapper not found: $vpnc_wrapper" >&2; exit 1; }
 
 runtime="$app_path/Contents/Resources/OpenConnect"
 binary_dir="$runtime/bin"
 frameworks="$app_path/Contents/Frameworks"
 mkdir -p "$binary_dir" "$frameworks"
 [[ -x "$binary_dir/CiscoConnectHelper" ]] || { echo "CiscoConnectHelper was not built." >&2; exit 1; }
-cp -fL "$vpnc_script" "$runtime/vpnc-script"
-chmod 755 "$binary_dir/CiscoConnectHelper" "$runtime/vpnc-script"
+cp -fL "$vpnc_script" "$runtime/vpnc-script.upstream"
+cp -fL "$vpnc_wrapper" "$runtime/vpnc-script"
+chmod 755 "$binary_dir/CiscoConnectHelper" "$runtime/vpnc-script" "$runtime/vpnc-script.upstream"
 [[ ! -f "$license_file" ]] || cp -fL "$license_file" "$runtime/OpenConnect-LGPL-2.1.txt"
 
 queue=()
