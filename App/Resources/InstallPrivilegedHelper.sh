@@ -53,5 +53,26 @@ source_plist="$source_contents/Resources/com.max.openconnectnative.helper.plist"
 /bin/cp "$source_plist" "$target_plist"
 /usr/sbin/chown root:wheel "$target_plist"
 /bin/chmod 644 "$target_plist"
-/bin/launchctl bootstrap system "$target_plist"
+
+# launchd can briefly retain the previous Mach service after bootout. Wait for
+# that stale registration to disappear; otherwise a successful `print` can be
+# mistaken for a successfully bootstrapped replacement.
+for attempt in 1 2 3 4 5; do
+  if ! /bin/launchctl print system/com.max.openconnectnative.helper >/dev/null 2>&1; then
+    break
+  fi
+  /bin/sleep 1
+done
+
+# Bootstrap the replacement and verify that launchd really registered it.
+service_started=false
+for attempt in 1 2 3 4 5; do
+  /bin/launchctl bootstrap system "$target_plist" >/dev/null 2>&1 || true
+  if /bin/launchctl print system/com.max.openconnectnative.helper >/dev/null 2>&1; then
+    service_started=true
+    break
+  fi
+  /bin/sleep 1
+done
+[[ "$service_started" == true ]] || exit 80
 /bin/launchctl enable system/com.max.openconnectnative.helper

@@ -11,8 +11,6 @@ struct RootView: View {
     @Bindable var model: AppModel
     @Binding var menuBarOnly: Bool
     let presentation: Presentation
-    @Environment(\.dismissWindow) private var dismissWindow
-    @Environment(\.openWindow) private var openWindow
     @AppStorage(AppPresentationPreferences.menuBarIntroductionKey) private var didShowMenuBarIntroduction = false
     @State private var showsConnectionDetails = false
     @State private var showsMenuBarIntroduction = false
@@ -33,7 +31,7 @@ struct RootView: View {
                 connectionView
             }
         }
-        .tint(OpenConnectPalette.blue)
+        .tint(OpenConnectPalette.accent)
         .padding(14)
         .frame(width: 460, height: 230, alignment: .topLeading)
         .alert("VPN", isPresented: Binding(
@@ -60,7 +58,7 @@ struct RootView: View {
         .task {
             guard presentation == .window else { return }
             if menuBarOnly {
-                dismissWindow(id: "main")
+                AppPresentationPreferences.hideMainWindow()
             } else if !didShowMenuBarIntroduction {
                 didShowMenuBarIntroduction = true
                 showsMenuBarIntroduction = true
@@ -73,9 +71,9 @@ struct RootView: View {
             HStack(spacing: 10) {
                 Image(systemName: model.status.canDisconnect ? "lock.open.fill" : "lock.fill")
                     .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(model.status.canDisconnect ? Color.green : .accentColor)
+                    .foregroundStyle(OpenConnectPalette.accent)
                     .frame(width: 38, height: 38)
-                    .background((model.status.canDisconnect ? Color.green : .accentColor).opacity(0.12), in: Circle())
+                    .background(OpenConnectPalette.accent.opacity(0.12), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
                     Text("OpenConnect Native")
                         .font(.headline)
@@ -178,7 +176,10 @@ struct RootView: View {
                 .help("Настройки")
                 .accessibilityLabel("Настройки")
 
-                if model.status.isBusy || model.isDiscoveringGroups {
+                if showsConnectionAnimation {
+                    PingPongConnectionIndicator()
+                        .help("Устанавливается VPN-соединение")
+                } else if model.status.isBusy || model.isDiscoveringGroups {
                     ProgressView()
                         .controlSize(.small)
                 } else {
@@ -233,6 +234,10 @@ struct RootView: View {
 
     private var connectButtonDisabled: Bool {
         model.status.isBusy || model.isDiscoveringGroups || model.profile.normalized().gateway.isEmpty
+    }
+
+    private var showsConnectionAnimation: Bool {
+        model.status.state == .connecting || model.status.state == .authenticating
     }
 
     private func statusText(at date: Date) -> String {
@@ -311,9 +316,9 @@ struct RootView: View {
         menuBarOnly = enabled
         AppPresentationPreferences.applyActivationPolicy(menuBarOnly: enabled)
         if enabled {
-            dismissWindow(id: "main")
+            AppPresentationPreferences.hideMainWindow()
         } else {
-            openWindow(id: "main")
+            AppPresentationPreferences.showMainWindow()
         }
     }
 }

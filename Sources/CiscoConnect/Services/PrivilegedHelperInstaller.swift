@@ -5,15 +5,25 @@ final class PrivilegedHelperInstaller {
     private static let installedVersionPath = "/Library/PrivilegedHelperTools/com.max.openconnectnative.runtime/version"
 
     private let fileManager: FileManager
+    private let availabilityWaiter: HelperAvailabilityWaiter
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        availabilityWaiter: HelperAvailabilityWaiter = HelperAvailabilityWaiter()
+    ) {
         self.fileManager = fileManager
+        self.availabilityWaiter = availabilityWaiter
     }
 
     func ensureInstalled(connection: PrivilegedHelperConnection) async throws {
         if installedVersion == bundledVersion {
             do {
-                try await connection.ping()
+                // launchd can accept the Mach request just before the helper's
+                // protected listener is ready. Retry that local handshake before
+                // deciding the root-owned installation needs repair.
+                try await availabilityWaiter.waitUntilAvailable {
+                    try await connection.ping()
+                }
                 return
             } catch {
                 // A stopped or stale daemon is repaired by the same one-time installer.
@@ -24,7 +34,9 @@ final class PrivilegedHelperInstaller {
             throw VPNError.appMustBeInstalled
         }
         try await install()
-        try await connection.ping()
+        try await availabilityWaiter.waitUntilAvailable {
+            try await connection.ping()
+        }
     }
 
     var isInstalled: Bool {
@@ -49,7 +61,9 @@ final class PrivilegedHelperInstaller {
     }
 
     private var bundledVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        Bundle.main.object(forInfoDictionaryKey: "OpenConnectHelperVersion") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "0"
     }
 
     private func install() async throws {
@@ -97,5 +111,27 @@ final class PrivilegedHelperInstaller {
 
     private func appleScriptLiteral(_ value: String) -> String {
         "\"\(value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
+    }
+}
+
+struct HelperAvailabilityWaiter {
+    let attempts: Int
+    let retryDelay: Duration
+
+    init(attempts: Int = 4, retryDelay: Duration = .milliseconds(300)) {
+        self.attempts = max(1, attempts)
+        self.retryDelay = retryDelay
+    }
+
+    func waitUntilAvailable(ping: () async throws -> Void) async throws {
+        for attempt in 1...attempts {
+            do {
+                try await ping()
+                return
+            } catch {
+                guard attempt < attempts else { throw error }
+                try await Task.sleep(for: retryDelay)
+            }
+        }
     }
 }
