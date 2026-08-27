@@ -4,6 +4,8 @@
 #import <errno.h>
 #import <fcntl.h>
 #import <signal.h>
+#import <stdarg.h>
+#import <stdio.h>
 #import <stdatomic.h>
 #import <sys/stat.h>
 #import <unistd.h>
@@ -27,11 +29,17 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSTimeInterval deadline;
 @property int commandFD;
 @property NSDictionary *networkInfo;
+@property NSDictionary *connectionDetails;
+@property NSDictionary *trafficStats;
 @property NSNumber *sessionExpiration;
 @property NSNumber *idleTimeoutSeconds;
+@property NSString *serverMessage;
+@property dispatch_source_t statsTimer;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
 - (BOOL)systemConfigurationIsReady;
+- (void)handleProgressMessage:(NSString *)message;
+- (void)updateTrafficStats:(const struct oc_stats *)stats;
 @end
 
 static HelperSession *activeSession;
@@ -55,7 +63,22 @@ static int validate_peer_certificate(void *data, const char *reason) {
 }
 
 static void progress_callback(void *data, int level, const char *format, ...) {
-    (void)data; (void)level; (void)format;
+    (void)level;
+    va_list arguments;
+    va_start(arguments, format);
+    char *rendered = NULL;
+    int length = format ? vasprintf(&rendered, format, arguments) : -1;
+    va_end(arguments);
+    if (length >= 0 && rendered) {
+        NSString *message = [[NSString alloc] initWithBytesNoCopy:rendered length:(NSUInteger)length encoding:NSUTF8StringEncoding freeWhenDone:YES];
+        [(__bridge HelperSession *)data handleProgressMessage:message ?: @""];
+    } else {
+        free(rendered);
+    }
+}
+
+static void stats_callback(void *data, const struct oc_stats *stats) {
+    [(__bridge HelperSession *)data updateTrafficStats:stats];
 }
 
 @implementation HelperSession
@@ -63,7 +86,9 @@ static void progress_callback(void *data, int level, const char *format, ...) {
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups {
     NSMutableDictionary *payload = [@{
         @"state": state, @"message": message, @"groups": groups,
-        @"networkInfo": self.networkInfo ?: @{}
+        @"networkInfo": self.networkInfo ?: @{},
+        @"connectionDetails": self.connectionDetails ?: @{},
+        @"trafficStats": self.trafficStats ?: @{}
     } mutableCopy];
     if (self.sessionExpiration) payload[@"sessionExpiration"] = self.sessionExpiration;
     if (self.idleTimeoutSeconds) payload[@"idleTimeoutSeconds"] = self.idleTimeoutSeconds;
@@ -91,21 +116,135 @@ static void progress_callback(void *data, int level, const char *format, ...) {
     NSString *defaultDomain = stringValue(info->domain);
     if (defaultDomain.length && ![domains containsObject:defaultDomain]) [domains addObject:defaultDomain];
     NSMutableArray *dnsServers = [NSMutableArray array];
+    NSMutableArray *nbnsServers = [NSMutableArray array];
     for (int index = 0; index < 3; index++) {
         NSString *server = stringValue(info->dns[index]);
         if (server.length && ![dnsServers containsObject:server]) [dnsServers addObject:server];
+        NSString *nbns = stringValue(info->nbns[index]);
+        if (nbns.length && ![nbnsServers containsObject:nbns]) [nbnsServers addObject:nbns];
     }
     NSMutableArray *vpnAddresses = [NSMutableArray array];
     NSString *ipv4 = stringValue(info->addr);
     NSString *ipv6 = stringValue(info->addr6);
     if (ipv4.length) [vpnAddresses addObject:ipv4];
     if (ipv6.length) [vpnAddresses addObject:ipv6];
+    NSMutableArray *vpnNetmasks = [NSMutableArray array];
+    NSString *netmask = stringValue(info->netmask);
+    NSString *netmask6 = stringValue(info->netmask6);
+    if (netmask.length) [vpnNetmasks addObject:netmask];
+    if (netmask6.length) [vpnNetmasks addObject:netmask6];
+    NSString *proxyPAC = stringValue(info->proxy_pac);
+    NSString *gatewayAddress = stringValue(info->gateway_addr);
+    if (!gatewayAddress.length) gatewayAddress = stringValue(openconnect_get_hostname(self.vpn));
+    NSString *interfaceName = stringValue(openconnect_get_ifname(self.vpn));
+
+    self.connectionDetails = [self connectionDetailsFromCSTPOptions:cstpOptions dtlsOptions:dtlsOptions];
     return @{
         @"available": @YES,
         @"includedRoutes": [self valuesFromSplitList:info->split_includes],
         @"excludedRoutes": [self valuesFromSplitList:info->split_excludes],
-        @"domains": domains, @"dnsServers": dnsServers, @"vpnAddresses": vpnAddresses
+        @"domains": domains, @"dnsServers": dnsServers, @"nbnsServers": nbnsServers,
+        @"vpnAddresses": vpnAddresses, @"vpnNetmasks": vpnNetmasks,
+        @"proxyPAC": proxyPAC, @"mtu": @(info->mtu),
+        @"gatewayAddress": gatewayAddress, @"interfaceName": interfaceName
     };
+}
+
+- (NSString *)optionValueNamed:(NSString *)wanted inList:(const struct oc_vpn_option *)options {
+    NSString *suffix = wanted.lowercaseString;
+    for (const struct oc_vpn_option *option = options; option; option = option->next) {
+        NSString *name = stringValue(option->option).lowercaseString;
+        if ([name isEqualToString:suffix] || [name hasSuffix:[@"-" stringByAppendingString:suffix]]) {
+            NSString *value = stringValue(option->value);
+            return value.length ? value : nil;
+        }
+    }
+    return nil;
+}
+
+- (void)setPositiveIntegerOption:(NSString *)name
+                            key:(NSString *)key
+                           list:(const struct oc_vpn_option *)options
+                         result:(NSMutableDictionary *)result {
+    NSString *value = [self optionValueNamed:name inList:options];
+    NSInteger number = value.integerValue;
+    if (number > 0) result[key] = @(number);
+}
+
+- (NSDictionary *)connectionDetailsFromCSTPOptions:(const struct oc_vpn_option *)cstpOptions
+                                       dtlsOptions:(const struct oc_vpn_option *)dtlsOptions {
+    NSMutableDictionary *result = [@{ @"available": @YES } mutableCopy];
+    NSString *gatewayHost = stringValue(openconnect_get_dnsname(self.vpn));
+    NSString *gatewayAddress = stringValue(openconnect_get_hostname(self.vpn));
+    NSString *fingerprint = stringValue(openconnect_get_peer_cert_hash(self.vpn));
+    if (gatewayHost.length) result[@"gatewayHost"] = gatewayHost;
+    if (gatewayAddress.length) result[@"gatewayAddress"] = gatewayAddress;
+    int port = openconnect_get_port(self.vpn);
+    if (port > 0) result[@"gatewayPort"] = @(port);
+    if (fingerprint.length) result[@"certificateFingerprint"] = fingerprint;
+    if (self.serverMessage.length) result[@"serverMessage"] = self.serverMessage;
+
+    [self setPositiveIntegerOption:@"Keepalive" key:@"keepaliveSeconds" list:cstpOptions result:result];
+    [self setPositiveIntegerOption:@"DPD" key:@"dpdSeconds" list:cstpOptions result:result];
+    [self setPositiveIntegerOption:@"Rekey-Time" key:@"rekeySeconds" list:cstpOptions result:result];
+    NSString *rekeyMethod = [self optionValueNamed:@"Rekey-Method" inList:cstpOptions];
+    if (rekeyMethod.length) result[@"rekeyMethod"] = rekeyMethod;
+
+    // Some gateways only provide DPD/keepalive values in the DTLS option set.
+    if (!result[@"keepaliveSeconds"]) [self setPositiveIntegerOption:@"Keepalive" key:@"keepaliveSeconds" list:dtlsOptions result:result];
+    if (!result[@"dpdSeconds"]) [self setPositiveIntegerOption:@"DPD" key:@"dpdSeconds" list:dtlsOptions result:result];
+    self.connectionDetails = result;
+    [self refreshDynamicConnectionDetails];
+    return self.connectionDetails;
+}
+
+- (void)refreshDynamicConnectionDetails {
+    NSMutableDictionary *result = [self.connectionDetails mutableCopy] ?: [@{ @"available": @YES } mutableCopy];
+    NSString *cstpCipher = stringValue(openconnect_get_cstp_cipher(self.vpn));
+    NSString *dtlsCipher = stringValue(openconnect_get_dtls_cipher(self.vpn));
+    NSString *cstpCompression = stringValue(openconnect_get_cstp_compression(self.vpn));
+    NSString *dtlsCompression = stringValue(openconnect_get_dtls_compression(self.vpn));
+    if (cstpCipher.length) result[@"cstpCipher"] = cstpCipher;
+    if (dtlsCipher.length) result[@"dtlsCipher"] = dtlsCipher;
+    if (cstpCompression.length) result[@"cstpCompression"] = cstpCompression;
+    if (dtlsCompression.length) result[@"dtlsCompression"] = dtlsCompression;
+    result[@"transport"] = dtlsCipher.length ? @"DTLS" : @"TLS";
+    self.connectionDetails = result;
+}
+
+- (void)handleProgressMessage:(NSString *)message {
+    if (!self.authenticationComplete || !self.networkInfo) return;
+    NSString *lowercase = message.lowercaseString;
+    NSString *notice = nil;
+    if ([lowercase containsString:@"reconnected"] || [lowercase containsString:@"reconnect successful"]) {
+        notice = @"";
+    } else if ([lowercase containsString:@"reconnect"] && ([lowercase containsString:@"fail"] || [lowercase containsString:@"unable"])) {
+        notice = @"Не удалось восстановить соединение";
+    } else if ([lowercase containsString:@"reconnect"]) {
+        notice = @"Восстановление соединения…";
+    } else if ([lowercase containsString:@"dtls"] && ([lowercase containsString:@"fail"] || [lowercase containsString:@"unable"])) {
+        notice = @"UDP недоступен — используется TLS";
+    } else if ([lowercase containsString:@"dtls connected"] || [lowercase containsString:@"dtls established"]) {
+        notice = @"";
+    } else {
+        return;
+    }
+    [self refreshDynamicConnectionDetails];
+    NSMutableDictionary *details = [self.connectionDetails mutableCopy];
+    if (notice.length) details[@"notice"] = notice;
+    else [details removeObjectForKey:@"notice"];
+    self.connectionDetails = details;
+    [self writeState:@"connected" message:@"VPN connected" groups:@[]];
+}
+
+- (void)updateTrafficStats:(const struct oc_stats *)stats {
+    if (!stats || !self.authenticationComplete || !self.networkInfo) return;
+    self.trafficStats = @{
+        @"receivedBytes": @(stats->rx_bytes), @"transmittedBytes": @(stats->tx_bytes),
+        @"receivedPackets": @(stats->rx_pkts), @"transmittedPackets": @(stats->tx_pkts)
+    };
+    [self refreshDynamicConnectionDetails];
+    [self writeState:@"connected" message:@"VPN connected" groups:@[]];
 }
 
 - (BOOL)systemConfigurationIsReady {
@@ -194,6 +333,8 @@ static void progress_callback(void *data, int level, const char *format, ...) {
 }
 
 - (int)processForm:(struct oc_auth_form *)form {
+    NSString *banner = [stringValue(form->banner) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (banner.length) self.serverMessage = [banner substringToIndex:MIN((NSUInteger)2000, banner.length)];
     NSArray *groups = [self groupsFromForm:form];
     if (self.mode == HelperModeDiscover) {
         [self writeState:@"groupsAvailable" message:groups.count ? @"Choose a VPN group" : @"No group selection is required" groups:groups];
@@ -282,6 +423,26 @@ static void scheduleTimeout(HelperSession *session) {
     });
 }
 
+static void startStatsTimer(HelperSession *session) {
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
+    session.statsTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    dispatch_source_set_timer(
+        session.statsTimer,
+        dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC),
+        NSEC_PER_SEC,
+        NSEC_PER_MSEC * 100
+    );
+    __weak HelperSession *weakSession = session;
+    dispatch_source_set_event_handler(session.statsTimer, ^{
+        HelperSession *strongSession = weakSession;
+        if (strongSession.vpn && strongSession.commandFD >= 0) {
+            char command = OC_CMD_STATS;
+            write(strongSession.commandFD, &command, 1);
+        }
+    });
+    dispatch_resume(session.statsTimer);
+}
+
 static int runRequest(NSDictionary *originalRequest) {
     NSMutableDictionary *request = [originalRequest mutableCopy];
     if (!request[@"vpncScript"]) request[@"vpncScript"] = [installedRuntimeRoot() stringByAppendingPathComponent:@"vpnc-script"];
@@ -300,6 +461,7 @@ static int runRequest(NSDictionary *originalRequest) {
     if (openconnect_init_ssl()) { result = 70; goto finished; }
     session.vpn = openconnect_vpninfo_new("AnyConnect", validate_peer_certificate, NULL, process_auth_form, progress_callback, (__bridge void *)session);
     if (!session.vpn) { result = 71; goto finished; }
+    openconnect_set_stats_handler(session.vpn, stats_callback);
     session.commandFD = openconnect_setup_cmd_pipe(session.vpn);
     scheduleTimeout(session);
     openconnect_set_protocol(session.vpn, "anyconnect");
@@ -340,6 +502,7 @@ static int runRequest(NSDictionary *originalRequest) {
     }
     openconnect_setup_dtls(session.vpn, 60);
     [session writeState:@"connected" message:@"VPN connected" groups:@[]];
+    startStatsTimer(session);
     int mainloopResult = openconnect_mainloop(session.vpn, 300, RECONNECT_INTERVAL_MIN);
     if (session.disconnectRequested) {
         [session writeState:@"disconnected" message:@"VPN отключён пользователем" groups:@[]];
@@ -352,6 +515,10 @@ static int runRequest(NSDictionary *originalRequest) {
     }
 
 finished:
+    if (session.statsTimer) {
+        dispatch_source_cancel(session.statsTimer);
+        session.statsTimer = nil;
+    }
     if (session.vpn) openconnect_vpninfo_free(session.vpn);
     session.vpn = NULL;
     activeSession = nil;

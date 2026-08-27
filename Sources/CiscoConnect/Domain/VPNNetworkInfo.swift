@@ -8,7 +8,13 @@ struct VPNNetworkInfo: Equatable, Sendable {
     var excludedRoutes: [String] = []
     var domains: [String] = []
     var dnsServers: [String] = []
+    var nbnsServers: [String] = []
     var vpnAddresses: [String] = []
+    var vpnNetmasks: [String] = []
+    var proxyPAC: String?
+    var mtu: Int?
+    var gatewayAddress: String?
+    var interfaceName: String?
 
     static let empty = VPNNetworkInfo()
 
@@ -22,14 +28,26 @@ struct VPNNetworkInfo: Equatable, Sendable {
         excludedRoutes: [String] = [],
         domains: [String] = [],
         dnsServers: [String] = [],
-        vpnAddresses: [String] = []
+        nbnsServers: [String] = [],
+        vpnAddresses: [String] = [],
+        vpnNetmasks: [String] = [],
+        proxyPAC: String? = nil,
+        mtu: Int? = nil,
+        gatewayAddress: String? = nil,
+        interfaceName: String? = nil
     ) {
         self.isAvailable = isAvailable
         self.includedRoutes = Self.normalized(includedRoutes)
         self.excludedRoutes = Self.normalized(excludedRoutes)
         self.domains = Self.normalized(domains)
         self.dnsServers = Self.normalized(dnsServers)
+        self.nbnsServers = Self.normalized(nbnsServers)
         self.vpnAddresses = Self.normalized(vpnAddresses)
+        self.vpnNetmasks = Self.normalized(vpnNetmasks)
+        self.proxyPAC = Self.normalized(proxyPAC)
+        self.mtu = mtu.flatMap { $0 > 0 ? $0 : nil }
+        self.gatewayAddress = Self.normalized(gatewayAddress)
+        self.interfaceName = Self.normalized(interfaceName)
     }
 
     init(propertyList: [String: Any]?) {
@@ -43,7 +61,13 @@ struct VPNNetworkInfo: Equatable, Sendable {
             excludedRoutes: propertyList["excludedRoutes"] as? [String] ?? [],
             domains: propertyList["domains"] as? [String] ?? [],
             dnsServers: propertyList["dnsServers"] as? [String] ?? [],
-            vpnAddresses: propertyList["vpnAddresses"] as? [String] ?? []
+            nbnsServers: propertyList["nbnsServers"] as? [String] ?? [],
+            vpnAddresses: propertyList["vpnAddresses"] as? [String] ?? [],
+            vpnNetmasks: propertyList["vpnNetmasks"] as? [String] ?? [],
+            proxyPAC: propertyList["proxyPAC"] as? String,
+            mtu: (propertyList["mtu"] as? NSNumber)?.intValue,
+            gatewayAddress: propertyList["gatewayAddress"] as? String,
+            interfaceName: propertyList["interfaceName"] as? String
         )
     }
 
@@ -54,5 +78,11 @@ struct VPNNetworkInfo: Equatable, Sendable {
             guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
             return trimmed
         }
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

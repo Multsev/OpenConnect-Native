@@ -14,23 +14,26 @@ struct RootView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppPresentationPreferences.menuBarIntroductionKey) private var didShowMenuBarIntroduction = false
-    @State private var showsNetworkInfo = false
+    @State private var showsConnectionDetails = false
     @State private var showsMenuBarIntroduction = false
     @State private var showsHelperRemovalConfirmation = false
 
     var body: some View {
         Group {
-            if showsNetworkInfo {
-                NetworkInfoView(
+            if showsConnectionDetails {
+                ConnectionDetailsView(
                     networkInfo: model.networkInfo,
+                    connectionDetails: model.connectionDetails,
+                    trafficStats: model.trafficStats,
                     sessionPolicy: model.status.sessionPolicy,
                     isConnected: model.status.state == .connected,
-                    close: { showsNetworkInfo = false }
+                    close: { showsConnectionDetails = false }
                 )
             } else {
                 connectionView
             }
         }
+        .tint(OpenConnectPalette.blue)
         .padding(14)
         .frame(width: 460, height: 230, alignment: .topLeading)
         .alert("VPN", isPresented: Binding(
@@ -149,8 +152,8 @@ struct RootView: View {
 
             HStack(spacing: 8) {
                 Menu {
-                    Button("Сведения об адресах") {
-                        showsNetworkInfo = true
+                    Button("Сведения") {
+                        showsConnectionDetails = true
                     }
                     Toggle("Только строка меню", isOn: Binding(
                         get: { menuBarOnly },
@@ -184,11 +187,23 @@ struct RootView: View {
                         .frame(width: 7, height: 7)
                 }
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(statusText(at: context.date))
+                    Button {
+                        showsConnectionDetails = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(statusText(at: context.date))
+                                .lineLimit(1)
+                            if model.status.state == .connected {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .semibold))
+                            }
+                        }
                         .font(.caption)
                         .foregroundStyle(statusColor(at: context.date))
-                        .lineLimit(1)
-                        .accessibilityLabel(statusAccessibilityLabel(at: context.date))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(statusAccessibilityLabel(at: context.date))
+                    .help("Показать сведения о подключении")
                 }
                 Spacer(minLength: 8)
                 Button(model.status.canDisconnect ? "Отключиться" : "Подключиться") {
@@ -204,6 +219,11 @@ struct RootView: View {
                     .foregroundStyle(.tertiary)
                     .accessibilityLabel("Версия приложения \(appVersion)")
             }
+        }
+        .overlay(alignment: .topTrailing) {
+            ApplicationIconWatermark()
+                .padding(.trailing, 2)
+                .offset(y: -3)
         }
     }
 
@@ -223,8 +243,10 @@ struct RootView: View {
         case .otpRequired: return "Введите OTP"
         case .connected:
             if model.status.sessionPolicy.hasExpired(at: date) { return "Сеанс завершается…" }
-            guard let remaining = model.status.sessionPolicy.remainingDescription(at: date) else { return "Подключено" }
-            return "Подключено · \(remaining)"
+            var parts = ["Подключено"]
+            if model.connectionDetails.isAvailable { parts.append(model.connectionDetails.transport.rawValue) }
+            if let remaining = model.status.sessionPolicy.remainingDescription(at: date) { parts.append(remaining) }
+            return parts.joined(separator: " · ")
         case .disconnecting: return "Отключение…"
         case .sessionExpired: return "Сеанс завершён"
         case .failed: return "Ошибка подключения"
@@ -238,6 +260,8 @@ struct RootView: View {
         case .connected where model.status.sessionPolicy.hasExpired(at: date):
             return .orange
         case .connected where model.status.sessionPolicy.isExpiringSoon(at: date):
+            return .orange
+        case .connected where model.connectionDetails.isAvailable && model.connectionDetails.transport == .tls:
             return .orange
         default:
             return .secondary
@@ -291,5 +315,18 @@ struct RootView: View {
         } else {
             openWindow(id: "main")
         }
+    }
+}
+
+private struct ApplicationIconWatermark: View {
+    var body: some View {
+        Image(nsImage: NSApplication.shared.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: 54, height: 54)
+            .opacity(0.28)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }

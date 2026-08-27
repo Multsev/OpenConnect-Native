@@ -41,7 +41,13 @@ final class VPNRulesTests: XCTestCase {
             "excludedRoutes": ["192.168.0.0/16"],
             "domains": ["corp.example.test", " corp.example.test"],
             "dnsServers": ["10.1.0.53"],
+            "nbnsServers": ["10.1.0.54"],
             "vpnAddresses": ["10.20.30.40"],
+            "vpnNetmasks": ["255.255.255.0"],
+            "proxyPAC": "https://proxy.example.test/pac",
+            "mtu": 1390,
+            "gatewayAddress": "203.0.113.8",
+            "interfaceName": "utun7",
         ])
 
         XCTAssertTrue(info.usesSplitTunnel)
@@ -49,7 +55,50 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(info.excludedRoutes, ["192.168.0.0/16"])
         XCTAssertEqual(info.domains, ["corp.example.test"])
         XCTAssertEqual(info.dnsServers, ["10.1.0.53"])
+        XCTAssertEqual(info.nbnsServers, ["10.1.0.54"])
         XCTAssertEqual(info.vpnAddresses, ["10.20.30.40"])
+        XCTAssertEqual(info.vpnNetmasks, ["255.255.255.0"])
+        XCTAssertEqual(info.proxyPAC, "https://proxy.example.test/pac")
+        XCTAssertEqual(info.mtu, 1390)
+        XCTAssertEqual(info.gatewayAddress, "203.0.113.8")
+        XCTAssertEqual(info.interfaceName, "utun7")
+    }
+
+    func testConnectionDetailsReadOnlyWhitelistedDisplayFields() {
+        let details = VPNConnectionDetails(propertyList: [
+            "available": true,
+            "transport": "DTLS",
+            "cstpCipher": "AES-256-GCM",
+            "dtlsCipher": "AES256-GCM-SHA384",
+            "gatewayHost": "vpn.example.test",
+            "gatewayAddress": "203.0.113.8",
+            "gatewayPort": 443,
+            "rekeySeconds": 3600,
+            "rekeyMethod": "new-tunnel",
+            "serverMessage": "Authorized access only",
+        ])
+
+        XCTAssertTrue(details.isAvailable)
+        XCTAssertEqual(details.transport, .dtls)
+        XCTAssertEqual(details.cipherDescription, "AES256-GCM-SHA384")
+        XCTAssertEqual(details.endpointDescription, "203.0.113.8:443")
+        XCTAssertEqual(details.rekeyDescription, "60 мин · new-tunnel")
+        XCTAssertEqual(details.serverMessage, "Authorized access only")
+    }
+
+    func testTrafficStatsReadUnsignedHelperCounters() {
+        let stats = VPNTrafficStats(propertyList: [
+            "receivedBytes": NSNumber(value: UInt64(1_048_576)),
+            "transmittedBytes": NSNumber(value: UInt64(524_288)),
+            "receivedPackets": NSNumber(value: UInt64(120)),
+            "transmittedPackets": NSNumber(value: UInt64(80)),
+        ])
+
+        XCTAssertTrue(stats.hasTraffic)
+        XCTAssertEqual(stats.receivedBytes, 1_048_576)
+        XCTAssertEqual(stats.transmittedBytes, 524_288)
+        XCTAssertEqual(stats.receivedPackets, 120)
+        XCTAssertEqual(stats.transmittedPackets, 80)
     }
 
     func testAuthenticationRequestKeepsOtpInChallengeField() throws {

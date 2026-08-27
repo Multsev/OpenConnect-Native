@@ -98,7 +98,9 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 message: snapshot.message,
                 attemptID: attemptID,
                 networkInfo: snapshot.networkInfo,
-                sessionPolicy: snapshot.sessionPolicy
+                sessionPolicy: snapshot.sessionPolicy,
+                connectionDetails: snapshot.connectionDetails,
+                trafficStats: snapshot.trafficStats
             )
         case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID)
         case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID)
@@ -115,7 +117,9 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 message: snapshot.message,
                 attemptID: attemptID,
                 networkInfo: snapshot.networkInfo,
-                sessionPolicy: snapshot.sessionPolicy
+                sessionPolicy: snapshot.sessionPolicy,
+                connectionDetails: snapshot.connectionDetails,
+                trafficStats: snapshot.trafficStats
             )
         case "disconnected": cleanUp(); return .disconnected
         default: return TunnelStatus(state: .connecting, message: snapshot.message, attemptID: attemptID)
@@ -162,7 +166,9 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
             sessionPolicy: VPNSessionPolicy(
                 expirationTimestamp: (dictionary["sessionExpiration"] as? NSNumber)?.doubleValue,
                 idleTimeout: (dictionary["idleTimeoutSeconds"] as? NSNumber)?.doubleValue
-            )
+            ),
+            connectionDetails: VPNConnectionDetails(propertyList: dictionary["connectionDetails"] as? [String: Any]),
+            trafficStats: VPNTrafficStats(propertyList: dictionary["trafficStats"] as? [String: Any])
         )
     }
 
@@ -204,4 +210,6 @@ private struct HelperSnapshot {
     let groups: [VPNGroup]
     let networkInfo: VPNNetworkInfo
     let sessionPolicy: VPNSessionPolicy
+    let connectionDetails: VPNConnectionDetails
+    let trafficStats: VPNTrafficStats
 }
