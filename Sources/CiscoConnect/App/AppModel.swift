@@ -11,6 +11,8 @@ final class AppModel {
     var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected
     var networkInfo: VPNNetworkInfo = .empty
+    var connectionDetails: VPNConnectionDetails = .empty
+    var trafficStats: VPNTrafficStats = .empty
     var errorMessage: String?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPassword = ""
@@ -79,6 +81,8 @@ final class AppModel {
             try await helperInstaller.uninstall()
             status = .disconnected
             networkInfo = .empty
+            connectionDetails = .empty
+            trafficStats = .empty
         } catch {
             errorMessage = error.localizedDescription
             status = connectionService.status
@@ -179,6 +183,10 @@ final class AppModel {
                 if updated.networkInfo.isAvailable {
                     self.networkInfo = updated.networkInfo
                 }
+                if updated.connectionDetails.isAvailable {
+                    self.connectionDetails = updated.connectionDetails
+                }
+                self.trafficStats = updated.trafficStats
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
                     try? self.passwordStore.save(self.pendingPassword)
                     self.password = ""

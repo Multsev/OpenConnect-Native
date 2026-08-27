@@ -54,6 +54,8 @@ struct TunnelStatus: Equatable, Sendable {
     var attemptID: UUID?
     var networkInfo: VPNNetworkInfo = .empty
     var sessionPolicy: VPNSessionPolicy = .empty
+    var connectionDetails: VPNConnectionDetails = .empty
+    var trafficStats: VPNTrafficStats = .empty
 
     static let disconnected = TunnelStatus(state: .disconnected, message: "VPN disconnected", attemptID: nil)
 
