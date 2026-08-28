@@ -46,6 +46,10 @@ enum TunnelState: String, Sendable {
     var canDisconnect: Bool {
         self == .connecting || self == .authenticating || self == .otpRequired || self == .connected
     }
+
+    var locksProfileFields: Bool {
+        isBusy || self == .connected
+    }
 }
 
 struct TunnelStatus: Equatable, Sendable {

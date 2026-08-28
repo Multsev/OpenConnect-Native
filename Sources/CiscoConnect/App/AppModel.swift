@@ -40,6 +40,7 @@ final class AppModel {
         self.sessionExpirationNotifier = sessionExpirationNotifier ?? NoopSessionExpirationNotifier()
         self.statusPollInterval = statusPollInterval
         profile = profileStore.load()
+        password = (try? passwordStore.read()) ?? ""
         status = connectionService.status
         self.sessionExpirationNotifier.cancel()
     }
@@ -189,7 +190,6 @@ final class AppModel {
                 self.trafficStats = updated.trafficStats
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
                     try? self.passwordStore.save(self.pendingPassword)
-                    self.password = ""
                     self.pendingPassword = ""
                 }
                 if updated.state == .connected,

@@ -15,6 +15,7 @@ struct RootView: View {
     @State private var showsConnectionDetails = false
     @State private var showsMenuBarIntroduction = false
     @State private var showsHelperRemovalConfirmation = false
+    @State private var showsPassword = false
 
     var body: some View {
         Group {
@@ -85,50 +86,89 @@ struct RootView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
                 inputRow("Шлюз") {
-                    TextField("vpn.example.com", text: $model.profile.gateway)
-                        .textContentType(.URL)
+                    if profileFieldsLocked {
+                        SelectableReadOnlyField(text: model.profile.gateway)
+                    } else {
+                        TextField("vpn.example.com", text: $model.profile.gateway)
+                            .textContentType(.URL)
+                    }
                 }
                 inputRow("Логин") {
-                    TextField("Логин", text: $model.profile.username)
-                        .textContentType(.username)
+                    if profileFieldsLocked {
+                        SelectableReadOnlyField(text: model.profile.username)
+                    } else {
+                        TextField("Логин", text: $model.profile.username)
+                            .textContentType(.username)
+                    }
                 }
                 inputRow("Пароль") {
-                    SecureField(model.hasStoredPassword ? "Сохранён в Keychain" : "Пароль", text: $model.password)
-                        .textContentType(.password)
-                }
-
-                inputRow("Группа") {
                     HStack(spacing: 6) {
-                        if !model.availableGroups.isEmpty {
-                            Picker("Группа", selection: Binding(
-                                get: { model.profile.group },
-                                set: { model.selectGroup($0) }
-                            )) {
-                                ForEach(model.availableGroups) { group in
-                                    Text(group.label).tag(group.id)
+                        if profileFieldsLocked {
+                            if showsPassword {
+                                SelectableReadOnlyField(text: model.password)
+                            } else {
+                                SelectableReadOnlySecureField(text: model.password)
+                            }
+                        } else {
+                            Group {
+                                if showsPassword {
+                                    TextField("Пароль", text: $model.password)
+                                } else {
+                                    SecureField("Пароль", text: $model.password)
                                 }
                             }
-                            .labelsHidden()
-                            .accessibilityLabel("Группа")
-                        } else {
-                            TextField("Группа", text: $model.profile.group)
+                            .textContentType(.password)
                         }
 
                         Button {
-                            Task { await model.refreshGroups() }
+                            showsPassword.toggle()
                         } label: {
-                            if model.isDiscoveringGroups {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(width: 14, height: 14)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
+                            Image(systemName: showsPassword ? "eye.slash" : "eye")
+                                .frame(width: 16, height: 16)
                         }
                         .buttonStyle(.borderless)
-                        .disabled(model.isDiscoveringGroups || model.status.canDisconnect)
-                        .help("Обновить группы")
-                        .accessibilityLabel("Обновить группы")
+                        .disabled(model.password.isEmpty)
+                        .help(showsPassword ? "Скрыть пароль" : "Показать пароль")
+                        .accessibilityLabel(showsPassword ? "Скрыть пароль" : "Показать пароль")
+                    }
+                }
+
+                inputRow("Группа") {
+                    if profileFieldsLocked {
+                        SelectableReadOnlyField(text: model.profile.group)
+                    } else {
+                        HStack(spacing: 6) {
+                            if !model.availableGroups.isEmpty {
+                                Picker("Группа", selection: Binding(
+                                    get: { model.profile.group },
+                                    set: { model.selectGroup($0) }
+                                )) {
+                                    ForEach(model.availableGroups) { group in
+                                        Text(group.label).tag(group.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .accessibilityLabel("Группа")
+                            } else {
+                                TextField("Группа", text: $model.profile.group)
+                            }
+
+                            Button {
+                                Task { await model.refreshGroups() }
+                            } label: {
+                                if model.isDiscoveringGroups {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .frame(width: 14, height: 14)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(model.isDiscoveringGroups)
+                            .help("Обновить группы")
+                            .accessibilityLabel("Обновить группы")
+                        }
                     }
                 }
 
@@ -234,6 +274,10 @@ struct RootView: View {
 
     private var connectButtonDisabled: Bool {
         model.status.isBusy || model.isDiscoveringGroups || model.profile.normalized().gateway.isEmpty
+    }
+
+    private var profileFieldsLocked: Bool {
+        model.status.state.locksProfileFields
     }
 
     private var showsConnectionAnimation: Bool {
