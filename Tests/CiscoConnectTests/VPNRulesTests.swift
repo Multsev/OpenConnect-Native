@@ -49,6 +49,17 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(MenuBarIconAppearance(tunnelState: .failed), .error)
     }
 
+    func testProfileFieldsAreLockedThroughoutAnActiveConnection() {
+        XCTAssertFalse(TunnelState.disconnected.locksProfileFields)
+        XCTAssertTrue(TunnelState.connecting.locksProfileFields)
+        XCTAssertTrue(TunnelState.authenticating.locksProfileFields)
+        XCTAssertTrue(TunnelState.otpRequired.locksProfileFields)
+        XCTAssertTrue(TunnelState.connected.locksProfileFields)
+        XCTAssertTrue(TunnelState.disconnecting.locksProfileFields)
+        XCTAssertFalse(TunnelState.sessionExpired.locksProfileFields)
+        XCTAssertFalse(TunnelState.failed.locksProfileFields)
+    }
+
     func testSessionPolicyFormatsServerLimitsAndWarningThreshold() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let expiration = now.addingTimeInterval(2 * 60 * 60 + 58 * 60 + 30)
@@ -300,6 +311,24 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(tunnel.connectionCount, 0)
         XCTAssertEqual(model.availableGroups, tunnel.discoveredGroups)
         XCTAssertEqual(model.profile.group, "staff")
+    }
+
+    @MainActor
+    func testAppModelLoadsStoredPasswordForProtectedField() {
+        let passwordStore = MemoryPasswordStore(password: "secret")
+        let model = AppModel(
+            profileStore: MemoryProfileStore(profile: VPNProfile()),
+            passwordStore: passwordStore,
+            connectionService: VPNConnectionService(
+                passwordStore: passwordStore,
+                attemptGuard: RecordingAttemptGuard(),
+                tunnel: RecordingTunnelClient()
+            ),
+            helperInstaller: PrivilegedHelperInstaller()
+        )
+
+        XCTAssertEqual(model.password, "secret")
+        XCTAssertTrue(model.hasStoredPassword)
     }
 
 }
