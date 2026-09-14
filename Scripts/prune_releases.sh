@@ -15,8 +15,10 @@ prune_local_releases() {
   [[ -d "$release_root" ]] || return 0
 
   versions=()
+  version_count=0
   while IFS= read -r version; do
-    versions+=("$version")
+    versions[$version_count]="$version"
+    version_count=$((version_count + 1))
   done < <(
       find "$release_root" -maxdepth 1 -type f -name 'OpenConnect-Native-*.dmg' -print \
         | sed -E 's#^.*/OpenConnect-Native-([0-9]+\.[0-9]+\.[0-9]+)\.dmg$#\1#' \
@@ -24,7 +26,7 @@ prune_local_releases() {
         | sort -t. -k1,1nr -k2,2nr -k3,3nr
     )
 
-  for ((index = keep_count; index < ${#versions[@]}; index++)); do
+  for ((index = keep_count; index < version_count; index++)); do
     version=${versions[$index]}
     rm -f \
       "$release_root/OpenConnect-Native-$version.dmg" \
@@ -47,7 +49,10 @@ prune_github_releases() {
         --jq "map(select(.isDraft == false)) | sort_by(.createdAt) | reverse | .[$keep_count:][] | .tagName"
     )
 
-  for tag in "${tags[@]}"; do
+  # `${array[@]-}` remains safe with `set -u` in macOS Bash 3.2 when no
+  # published release needs pruning.
+  for tag in "${tags[@]-}"; do
+    [[ -n "$tag" ]] || continue
     gh release delete "$tag" --yes
     echo "Removed GitHub release $tag (Git tag preserved)"
   done
