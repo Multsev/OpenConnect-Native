@@ -153,7 +153,8 @@ workflow использует `development` с ad-hoc подписью; така
 ## Публикация на GitHub
 
 Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
-собирает DMG на macOS 14. Pull request публикует артефакт проверки, а тег вида
+запускает тесты для каждого push в `main`. Pull request дополнительно собирает
+DMG на macOS 14 и публикует артефакт проверки, а тег вида
 `v0.7.7` создаёт GitHub Release с DMG и SHA-256:
 
 ```bash
