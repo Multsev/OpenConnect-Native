@@ -231,11 +231,13 @@ final class VPNRulesTests: XCTestCase {
 
         await model.toggleConnection()
         tunnel.status = TunnelStatus(state: .connected, message: "VPN connected", attemptID: tunnel.attemptID)
-        try await Task.sleep(for: .milliseconds(40))
+        let didConnect = await waitUntil { model.status.state == .connected }
+        XCTAssertTrue(didConnect)
         XCTAssertEqual(model.status.state, .connected)
 
         tunnel.status = TunnelStatus(state: .disconnected, message: "VPN-соединение прервано", attemptID: tunnel.attemptID)
-        try await Task.sleep(for: .milliseconds(40))
+        let didDisconnect = await waitUntil { model.status.state == .disconnected }
+        XCTAssertTrue(didDisconnect)
 
         XCTAssertEqual(model.status.state, .disconnected)
         XCTAssertEqual(model.errorMessage, "VPN-соединение прервано")
@@ -269,7 +271,8 @@ final class VPNRulesTests: XCTestCase {
             attemptID: tunnel.attemptID,
             sessionPolicy: VPNSessionPolicy(expirationDate: expiration)
         )
-        try await Task.sleep(for: .milliseconds(40))
+        let didScheduleExpiration = await waitUntil { notifier.scheduledExpirations == [expiration] }
+        XCTAssertTrue(didScheduleExpiration)
 
         XCTAssertEqual(notifier.scheduledExpirations, [expiration])
 
@@ -279,7 +282,8 @@ final class VPNRulesTests: XCTestCase {
             attemptID: tunnel.attemptID,
             sessionPolicy: VPNSessionPolicy(expirationDate: expiration)
         )
-        try await Task.sleep(for: .milliseconds(40))
+        let didExpire = await waitUntil { model.status.state == .sessionExpired }
+        XCTAssertTrue(didExpire)
 
         XCTAssertEqual(model.status.state, .sessionExpired)
         XCTAssertNil(model.errorMessage)
@@ -329,6 +333,19 @@ final class VPNRulesTests: XCTestCase {
 
         XCTAssertEqual(model.password, "secret")
         XCTAssertTrue(model.hasStoredPassword)
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
     }
 
 }
