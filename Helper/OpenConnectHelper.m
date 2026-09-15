@@ -25,6 +25,11 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property BOOL authenticationRejected;
 @property BOOL timedOut;
 @property BOOL authenticationComplete;
+@property BOOL tunnelEstablished;
+@property BOOL sessionFinished;
+@property NSString *stage;
+@property NSTimeInterval stageStartedAt;
+@property NSMutableArray *stageEvents;
 @property BOOL disconnectRequested;
 @property NSTimeInterval deadline;
 @property int commandFD;
@@ -37,6 +42,7 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSString *interfaceName;
 @property BOOL systemConfigurationApplied;
 @property dispatch_source_t statsTimer;
+- (void)setConnectionStage:(NSString *)stage;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
 - (BOOL)systemConfigurationIsReady;
@@ -49,6 +55,20 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 static HelperSession *activeSession;
 static dispatch_queue_t sessionQueue;
 static atomic_bool sessionReserved = false;
+static atomic_bool cancellationRequested = false;
+
+static void ignoreBrokenPipe(void) {
+    // libopenconnect and our command pipe must return EPIPE, not kill the daemon.
+    signal(SIGPIPE, SIG_IGN);
+}
+
+static BOOL sendSessionCommand(HelperSession *session, char command) {
+    if (!session) return NO;
+    @synchronized (session) {
+        if (session.sessionFinished || session.commandFD < 0) return NO;
+        return write(session.commandFD, &command, 1) == 1;
+    }
+}
 
 static NSString *stringValue(const char *value) {
     return value ? [NSString stringWithUTF8String:value] : @"";
@@ -87,12 +107,30 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 
 @implementation HelperSession
 
+- (void)setConnectionStage:(NSString *)stage {
+    @synchronized (self) {
+        if ([self.stage isEqualToString:stage]) return;
+        self.stage = stage;
+        self.stageStartedAt = NSDate.date.timeIntervalSince1970;
+        self.deadline = self.stageStartedAt + ([stage isEqualToString:@"waitingOTP"] ? 60 : 45);
+        if (!self.stageEvents) self.stageEvents = [NSMutableArray array];
+        [self.stageEvents addObject:@{ @"stage": stage, @"time": @(self.stageStartedAt) }];
+        if (self.stageEvents.count > 20) [self.stageEvents removeObjectAtIndex:0];
+    }
+}
+
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups {
+    @synchronized (self) {
     NSMutableDictionary *payload = [@{
         @"state": state, @"message": message, @"groups": groups,
         @"networkInfo": self.networkInfo ?: @{},
         @"connectionDetails": self.connectionDetails ?: @{},
-        @"trafficStats": self.trafficStats ?: @{}
+        @"trafficStats": self.trafficStats ?: @{},
+        @"progress": @{
+            @"stage": self.stage ?: @"preparing",
+            @"stageStartedAt": @(self.stageStartedAt),
+            @"events": [self.stageEvents copy] ?: @[]
+        }
     } mutableCopy];
     if (self.sessionExpiration) payload[@"sessionExpiration"] = self.sessionExpiration;
     if (self.idleTimeoutSeconds) payload[@"idleTimeoutSeconds"] = self.idleTimeoutSeconds;
@@ -100,6 +138,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     [payload writeToFile:temporary atomically:YES];
     chmod(temporary.fileSystemRepresentation, 0644);
     rename(temporary.fileSystemRepresentation, self.statusPath.fileSystemRepresentation);
+    }
 }
 
 - (NSArray *)valuesFromSplitList:(const struct oc_split_include *)item {
@@ -217,7 +256,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 }
 
 - (void)handleProgressMessage:(NSString *)message {
-    if (!self.authenticationComplete || !self.networkInfo) return;
+    if (!self.tunnelEstablished || !self.networkInfo) return;
     NSString *lowercase = message.lowercaseString;
     NSString *notice = nil;
     if ([lowercase containsString:@"reconnected"] || [lowercase containsString:@"reconnect successful"]) {
@@ -242,7 +281,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 }
 
 - (void)updateTrafficStats:(const struct oc_stats *)stats {
-    if (!stats || !self.authenticationComplete || !self.networkInfo) return;
+    if (!stats || !self.tunnelEstablished || !self.networkInfo) return;
     self.trafficStats = @{
         @"receivedBytes": @(stats->rx_bytes), @"transmittedBytes": @(stats->tx_bytes),
         @"receivedPackets": @(stats->rx_pkts), @"transmittedPackets": @(stats->tx_pkts)
@@ -383,9 +422,10 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 
 - (NSString *)waitForOTP {
     if (self.otpSubmitted) return nil;
-    self.deadline = NSDate.date.timeIntervalSince1970 + 60;
+    [self setConnectionStage:@"waitingOTP"];
     [self writeState:@"otpRequired" message:@"Enter the one-time code" groups:@[]];
     while (NSDate.date.timeIntervalSince1970 < self.deadline) {
+        if (self.disconnectRequested || atomic_load(&cancellationRequested)) return nil;
         NSData *data = [NSData dataWithContentsOfFile:self.otpPath];
         if (data.length) {
             unlink(self.otpPath.fileSystemRepresentation);
@@ -404,6 +444,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 }
 
 - (int)processForm:(struct oc_auth_form *)form {
+    if (self.disconnectRequested || atomic_load(&cancellationRequested)) return OC_FORM_RESULT_CANCELLED;
     NSString *banner = [stringValue(form->banner) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (banner.length) self.serverMessage = [banner substringToIndex:MIN((NSUInteger)2000, banner.length)];
     NSArray *groups = [self groupsFromForm:form];
@@ -461,6 +502,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
             return OC_FORM_RESULT_ERR;
         }
     }
+    [self setConnectionStage:self.otpSubmitted ? @"checkingOTP" : @"credentials"];
     [self writeState:@"authenticating" message:self.otpSubmitted ? @"Checking the one-time code" : @"Checking credentials" groups:@[]];
     return OC_FORM_RESULT_OK;
 }
@@ -468,9 +510,8 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 
 static void stop_signal(int signalNumber) {
     (void)signalNumber;
-    HelperSession *session = activeSession;
-    if (session) session.disconnectRequested = YES;
-    if (session && session.commandFD >= 0) write(session.commandFD, "x", 1);
+    atomic_store(&cancellationRequested, true);
+
 }
 
 static NSString *installedRuntimeRoot(void) {
@@ -486,10 +527,19 @@ static NSString *installedContainerRoot(void) {
 
 static void scheduleTimeout(HelperSession *session) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        while (session.vpn && !session.authenticationComplete && NSDate.date.timeIntervalSince1970 < session.deadline) usleep(200000);
-        if (session.vpn && !session.authenticationComplete && NSDate.date.timeIntervalSince1970 >= session.deadline) {
-            session.timedOut = YES;
-            if (session.commandFD >= 0) write(session.commandFD, "x", 1);
+        while (!session.sessionFinished) {
+            if (atomic_load(&cancellationRequested)) {
+                session.disconnectRequested = YES;
+                sendSessionCommand(session, OC_CMD_CANCEL);
+                return;
+            }
+            if (!session.tunnelEstablished && NSDate.date.timeIntervalSince1970 >= session.deadline) {
+                session.timedOut = YES;
+                [session writeState:@"failed" message:@"Истекло время ожидания на текущем этапе подключения" groups:@[]];
+                sendSessionCommand(session, OC_CMD_CANCEL);
+                return;
+            }
+            usleep(200000);
         }
     });
 }
@@ -506,10 +556,7 @@ static void startStatsTimer(HelperSession *session) {
     __weak HelperSession *weakSession = session;
     dispatch_source_set_event_handler(session.statsTimer, ^{
         HelperSession *strongSession = weakSession;
-        if (strongSession.vpn && strongSession.commandFD >= 0) {
-            char command = OC_CMD_STATS;
-            write(strongSession.commandFD, &command, 1);
-        }
+        sendSessionCommand(strongSession, OC_CMD_STATS);
     });
     dispatch_resume(session.statsTimer);
 }
@@ -526,31 +573,39 @@ static int runRequest(NSDictionary *originalRequest) {
     session.commandFD = -1;
     session.deadline = NSDate.date.timeIntervalSince1970 + 45;
     [[NSString stringWithFormat:@"%d\n", getpid()] writeToFile:request[@"pidPath"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [session setConnectionStage:@"contacting"];
     [session writeState:@"authenticating" message:session.mode == HelperModeDiscover ? @"Loading VPN groups" : @"Contacting VPN gateway" groups:@[]];
 
     int result = 0;
-    if (openconnect_init_ssl()) { result = 70; goto finished; }
+    if (atomic_load(&cancellationRequested)) goto finished;
+    if (openconnect_init_ssl()) { [session writeState:@"failed" message:@"Не удалось инициализировать TLS" groups:@[]]; result = 70; goto finished; }
     session.vpn = openconnect_vpninfo_new("AnyConnect", validate_peer_certificate, NULL, process_auth_form, progress_callback, (__bridge void *)session);
-    if (!session.vpn) { result = 71; goto finished; }
+    if (!session.vpn) { [session writeState:@"failed" message:@"Не удалось создать VPN-контекст" groups:@[]]; result = 71; goto finished; }
     openconnect_set_stats_handler(session.vpn, stats_callback);
     session.commandFD = openconnect_setup_cmd_pipe(session.vpn);
+    if (session.commandFD < 0) { [session writeState:@"failed" message:@"Не удалось создать канал управления VPN" groups:@[]]; result = 79; goto finished; }
     scheduleTimeout(session);
     openconnect_set_protocol(session.vpn, "anyconnect");
     openconnect_set_xmlpost(session.vpn, 1);
     openconnect_set_pfs(session.vpn, 0);
     openconnect_set_reported_os(session.vpn, "mac-intel");
-    if (openconnect_parse_url(session.vpn, [request[@"gateway"] UTF8String])) { result = 72; goto finished; }
+    if (openconnect_parse_url(session.vpn, [request[@"gateway"] UTF8String])) { [session writeState:@"failed" message:@"Недопустимый адрес VPN-шлюза" groups:@[]]; result = 72; goto finished; }
     int auth = openconnect_obtain_cookie(session.vpn);
     session.authenticationComplete = auth == 0;
+    if (session.disconnectRequested || session.timedOut || atomic_load(&cancellationRequested)) goto finished;
     if (session.mode == HelperModeDiscover) goto finished;
     if (auth) {
-        if (session.passwordSubmitted && !session.timedOut) session.authenticationRejected = YES;
-        NSString *message = session.timedOut ? @"Authentication timed out" : (session.authenticationRejected ? @"The gateway rejected the credentials or one-time code; automatic retry is disabled" : @"Authentication could not be completed");
+        // A transport failure after sending OTP is not proof of rejected credentials.
+        // Only an explicit rejected authentication form sets authenticationRejected.
+        NSString *message = session.timedOut ? @"Authentication timed out" : (session.authenticationRejected ? @"The gateway rejected the credentials or one-time code; automatic retry is disabled" : [NSString stringWithFormat:@"Авторизация не завершена: ошибка обмена со шлюзом (код OpenConnect: %d)", auth]);
         [session writeState:session.authenticationRejected ? @"authenticationFailed" : @"failed" message:message groups:@[]];
         result = 73; goto finished;
     }
-    if (openconnect_make_cstp_connection(session.vpn)) {
-        [session writeState:@"failed" message:@"Could not establish the encrypted VPN channel" groups:@[]];
+    [session setConnectionStage:@"tlsTunnel"];
+    [session writeState:@"connecting" message:@"Создание TLS-туннеля" groups:@[]];
+    int cstpResult = openconnect_make_cstp_connection(session.vpn);
+    if (cstpResult) {
+        [session writeState:@"failed" message:[NSString stringWithFormat:@"Не удалось создать TLS-туннель (код OpenConnect: %d)", cstpResult] groups:@[]];
         result = 74; goto finished;
     }
     time_t authExpiration = openconnect_get_auth_expiration(session.vpn);
@@ -558,14 +613,20 @@ static int runRequest(NSDictionary *originalRequest) {
     if (authExpiration > 0) session.sessionExpiration = @((long long)authExpiration);
     if (idleTimeout > 0) session.idleTimeoutSeconds = @(idleTimeout);
     session.networkInfo = [session networkInfoFromVPN];
+    [session setConnectionStage:@"interface"];
+    [session writeState:@"connecting" message:@"Создание интерфейса и маршрутов macOS" groups:@[]];
     if (openconnect_setup_tun_device(session.vpn, [request[@"vpncScript"] UTF8String], NULL)) {
         [session writeState:@"failed" message:@"Could not create the macOS VPN interface" groups:@[]];
         result = 75; goto finished;
     }
+    [session setConnectionStage:@"dns"];
+    [session writeState:@"connecting" message:@"Настройка корпоративного DNS" groups:@[]];
     if (![session applyScopedSystemConfiguration]) {
         [session writeState:@"failed" message:@"macOS не применила изолированную DNS-конфигурацию VPN" groups:@[]];
         result = 76; goto finished;
     }
+    [session setConnectionStage:@"networkCheck"];
+    [session writeState:@"connecting" message:@"Проверка адреса и DNS macOS" groups:@[]];
     BOOL configurationReady = NO;
     for (int check = 0; check < 20 && !configurationReady; check++) {
         configurationReady = [session systemConfigurationIsReady];
@@ -575,7 +636,12 @@ static int runRequest(NSDictionary *originalRequest) {
         [session writeState:@"failed" message:@"macOS не применила VPN-адрес или корпоративные DNS" groups:@[]];
         result = 77; goto finished;
     }
+    [session setConnectionStage:@"dtls"];
+    [session writeState:@"connecting" message:@"Настройка UDP-транспорта DTLS" groups:@[]];
     openconnect_setup_dtls(session.vpn, 60);
+    if (session.timedOut || session.disconnectRequested || atomic_load(&cancellationRequested)) goto finished;
+    session.tunnelEstablished = YES;
+    [session setConnectionStage:@"connected"];
     [session writeState:@"connected" message:@"VPN connected" groups:@[]];
     startStatsTimer(session);
     int mainloopResult = openconnect_mainloop(session.vpn, 300, RECONNECT_INTERVAL_MIN);
@@ -590,11 +656,24 @@ static int runRequest(NSDictionary *originalRequest) {
     }
 
 finished:
+    if (session.timedOut) {
+        [session writeState:@"failed" message:@"Истекло время ожидания на текущем этапе подключения" groups:@[]];
+        result = 80;
+    }
+    if (session.disconnectRequested || atomic_load(&cancellationRequested)) {
+        [session writeState:@"disconnected" message:@"VPN отключён пользователем" groups:@[]];
+        result = 0;
+    }
     if (session.statsTimer) {
         dispatch_source_cancel(session.statsTimer);
         session.statsTimer = nil;
     }
-    if (session.vpn) openconnect_vpninfo_free(session.vpn);
+    @synchronized (session) {
+        session.sessionFinished = YES;
+        session.commandFD = -1;
+        if (session.vpn) openconnect_vpninfo_free(session.vpn);
+        session.vpn = NULL;
+    }
     [session removeScopedSystemConfiguration];
     session.vpn = NULL;
     activeSession = nil;
@@ -670,10 +749,15 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
     NSString *command = rawCommand ? [NSString stringWithUTF8String:rawCommand] : @"";
     if ([command isEqualToString:@"ping"]) { sendReply(event, YES, @""); return; }
     if ([command isEqualToString:@"disconnect"]) {
+        atomic_store(&cancellationRequested, true);
         HelperSession *session = activeSession;
         if (session) session.disconnectRequested = YES;
-        if (session && session.commandFD >= 0) write(session.commandFD, "x", 1);
-        sendReply(event, YES, @"");
+        sendSessionCommand(session, OC_CMD_CANCEL);
+        // Acknowledge only after the session queue has restored DNS and
+        // released the tunnel; this also covers cancellation before startup.
+        dispatch_async(sessionQueue, ^{
+            dispatch_async(dispatch_get_main_queue(), ^{ sendReply(event, YES, @""); });
+        });
         return;
     }
     if (![command isEqualToString:@"connect"]) { sendReply(event, NO, @"Неизвестная команда"); return; }
@@ -688,6 +772,7 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
         return;
     }
     if (atomic_exchange(&sessionReserved, true)) { sendReply(event, NO, @"VPN-сеанс уже запущен"); return; }
+    atomic_store(&cancellationRequested, false);
     uid_t peerUID = xpc_connection_get_euid(peer);
     if (!protectSessionDirectory(request, peerUID)) {
         atomic_store(&sessionReserved, false);
@@ -725,6 +810,7 @@ static int runDaemon(void) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        ignoreBrokenPipe();
         signal(SIGINT, stop_signal);
         signal(SIGTERM, stop_signal);
         if (argc == 1) return runDaemon();

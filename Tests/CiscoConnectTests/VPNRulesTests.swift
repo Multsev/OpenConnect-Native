@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
@@ -336,6 +338,319 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelPendingStartIgnoresLateSuccessAndAllowsReconnect() async {
+        let tunnel = RecordingTunnelClient()
+        tunnel.suspendConnect = true
+        let model = makeCancellationModel(tunnel)
+        let start = Task { await model.toggleConnection() }
+        let started = await waitUntil { tunnel.connectContinuation != nil }
+        XCTAssertTrue(started)
+        XCTAssertEqual(model.connectionButtonTitle, "Отменить")
+        XCTAssertFalse(model.connectionButtonDisabled)
+
+        await model.toggleConnection()
+        XCTAssertEqual(tunnel.disconnectionCount, 1)
+        XCTAssertEqual(model.status.state, .disconnected)
+        tunnel.connectContinuation?.resume(returning: TunnelStatus(state: .connected, message: "late", attemptID: tunnel.attemptID))
+        tunnel.connectContinuation = nil
+        await start.value
+        XCTAssertEqual(model.status.state, .disconnected)
+        XCTAssertNil(model.errorMessage)
+
+        tunnel.suspendConnect = false
+        await model.toggleConnection()
+        XCTAssertEqual(tunnel.connectionCount, 2)
+        XCTAssertEqual(model.status.state, .authenticating)
+        await model.disconnect()
+    }
+
+    @MainActor
+    func testCancellationAvailableDuringOTPAndWithEmptyGateway() async {
+        let tunnel = RecordingTunnelClient()
+        let model = makeCancellationModel(tunnel)
+        await model.toggleConnection()
+        model.profile.gateway = ""
+        tunnel.status.state = .otpRequired
+        let otpShown = await waitUntil { model.status.state == .otpRequired }
+        XCTAssertTrue(otpShown)
+        XCTAssertFalse(model.connectionButtonDisabled)
+        XCTAssertEqual(model.connectionButtonTitle, "Отменить")
+        model.otp = "123456"
+        await model.toggleConnection()
+        XCTAssertEqual(model.otp, "")
+        XCTAssertEqual(model.status.state, .disconnected)
+    }
+
+    @MainActor
+    func testFailedDisconnectCanBeRetried() async {
+        let tunnel = RecordingTunnelClient()
+        let model = makeCancellationModel(tunnel)
+        await model.toggleConnection()
+        tunnel.failDisconnect = true
+        let stopped = await model.disconnect()
+        XCTAssertFalse(stopped)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertFalse(model.connectionButtonDisabled)
+        tunnel.failDisconnect = false
+        await model.toggleConnection()
+        XCTAssertEqual(tunnel.disconnectionCount, 2)
+        XCTAssertEqual(model.status.state, .disconnected)
+    }
+
+    @MainActor
+    func testCancelledGroupDiscoveryDoesNotChangeProfileOrStartVPN() async {
+        let tunnel = RecordingTunnelClient()
+        tunnel.suspendDiscovery = true
+        let model = makeCancellationModel(tunnel)
+        model.profile.group = ""
+        let start = Task { await model.toggleConnection() }
+        let started = await waitUntil { tunnel.discoveryContinuation != nil }
+        XCTAssertTrue(started)
+        XCTAssertFalse(model.connectionButtonDisabled)
+        await model.toggleConnection()
+        tunnel.discoveryContinuation?.resume(returning: [VPNGroup(id: "late", label: "Late")])
+        tunnel.discoveryContinuation = nil
+        await start.value
+        XCTAssertEqual(model.profile.group, "")
+        XCTAssertTrue(model.availableGroups.isEmpty)
+        XCTAssertEqual(tunnel.connectionCount, 0)
+        XCTAssertEqual(model.status.state, .disconnected)
+    }
+
+    @MainActor
+    func testLateStatusReplyCannotReviveCancelledSession() async {
+        let tunnel = RecordingTunnelClient()
+        tunnel.suspendStatus = true
+        let model = makeCancellationModel(tunnel)
+        await model.toggleConnection()
+        let polling = await waitUntil { tunnel.statusContinuation != nil }
+        XCTAssertTrue(polling)
+        await model.disconnect()
+        tunnel.statusContinuation?.resume(returning: TunnelStatus(state: .connected, message: "late", attemptID: tunnel.attemptID))
+        tunnel.statusContinuation = nil
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(model.status.state, .disconnected)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testHelperReplyIgnoresDuplicateCompletion() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let reply = HelperReplyCompletion(continuation: continuation)
+            reply.finish(.success(()))
+            reply.finish(.failure(VPNError.authenticationTimeout))
+        }
+    }
+
+    @MainActor
+    func testConnectionLayoutFitsOTPAndLongProfileValues() async throws {
+        _ = NSApplication.shared
+        let model = makeCancellationModel(RecordingTunnelClient())
+        model.profile.gateway = "https://" + String(repeating: "long-gateway-", count: 20) + "example.test"
+        model.profile.username = String(repeating: "long-user-", count: 30)
+        model.profile.group = String(repeating: "long-group-", count: 30)
+        model.password = String(repeating: "test-password-", count: 30)
+        model.otp = "123456"
+        model.availableGroups = [VPNGroup(id: model.profile.group, label: String(repeating: "Very long VPN group ", count: 30))]
+        var sizes: [TunnelState: CGSize] = [:]
+        for state in [TunnelState.disconnected, .connecting, .otpRequired, .connected, .disconnecting, .failed] {
+            model.status = TunnelStatus(state: state, message: "Test", attemptID: nil)
+            let host = NSHostingView(rootView: RootView(model: model, menuBarOnly: .constant(true), presentation: .menuBar).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .light))
+            host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+            let size = host.fittingSize
+            sizes[state] = size
+            XCTAssertEqual(size.width, 460, accuracy: 1, "Width changed for \(state)")
+            host.setFrameSize(size)
+            host.layoutSubtreeIfNeeded()
+            func textFields(in view: NSView) -> [NSTextField] {
+                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { textFields(in: $0) }
+            }
+            for field in textFields(in: host) where field.isBezeled {
+                XCTAssertGreaterThan(field.frame.width, 200, "Input collapsed for \(state)")
+                let frame = field.convert(field.bounds, to: host)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, size.width + 1)
+                XCTAssertGreaterThanOrEqual(frame.minY, 0)
+                XCTAssertLessThanOrEqual(frame.maxY, size.height + 1)
+            }
+            XCTAssertGreaterThan(size.height, 200)
+            XCTAssertLessThan(size.height, 400)
+            if let directory = ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"],
+               let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("layout-\(state.rawValue).png"))
+            }
+        }
+        let normal = try XCTUnwrap(sizes[.connecting])
+        let otp = try XCTUnwrap(sizes[.otpRequired])
+        XCTAssertGreaterThan(otp.height, normal.height + 20, "OTP must grow the container instead of overflowing it")
+    }
+
+    @MainActor
+    func testMenuContentReportsHeightWhenOTPIsAddedAndRemoved() async throws {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let popover = NSPopover()
+        let controller = ContentSizedHostingController(rootView: RootView(
+            model: model, menuBarOnly: .constant(true), presentation: .menuBar
+        ), onSizeChange: { popover.contentSize = $0 })
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.close() }
+        let host = controller.view
+        host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
+        func settle() async throws {
+            host.setFrameSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try await settle()
+        let initial = popover.contentSize
+        model.status.state = .otpRequired
+        try await settle()
+        XCTAssertEqual(popover.contentSize.width, 460, accuracy: 1)
+        XCTAssertGreaterThan(popover.contentSize.height, initial.height + 20)
+        for state in [TunnelState.failed, .disconnected, .connecting, .otpRequired, .sessionExpired, .disconnected] {
+            model.status.state = state
+            model.isDiscoveringGroups = state == .disconnected
+            try await settle()
+            XCTAssertEqual(popover.contentSize.width, 460, accuracy: 1)
+            if state == .otpRequired {
+                XCTAssertGreaterThan(popover.contentSize.height, initial.height + 20)
+            } else {
+                XCTAssertLessThan(popover.contentSize.height, initial.height + 15)
+            }
+        }
+    }
+
+    @MainActor
+    func testLongErrorAndDiagnosticPagesStayWithinTheirViewport() async throws {
+        let longText = String(repeating: "Very long diagnostic value without sensitive data. ", count: 500)
+        let pages: [(String, AnyView, CGSize)] = [
+            ("error", AnyView(VPNErrorView(message: longText, dismiss: {})), CGSize(width: 432, height: 240)),
+            ("network", AnyView(NetworkPolicyDetailsView(networkInfo: VPNNetworkInfo(
+                isAvailable: true,
+                includedRoutes: (0..<200).map { "10.\($0).0.0/16" },
+                domains: [longText], proxyPAC: "https://example.test/" + longText
+            )).frame(width: 432, height: 202)), CGSize(width: 432, height: 202)),
+            ("certificate", AnyView(CertificateDetailsView(details: VPNConnectionDetails(propertyList: [
+                "available": true, "gatewayHost": longText, "certificateFingerprint": longText
+            ])).frame(width: 432, height: 202)), CGSize(width: 432, height: 202)),
+            ("summary", AnyView(ConnectionDetailsView(networkInfo: .empty,
+                connectionDetails: VPNConnectionDetails(propertyList: ["available": true, "serverMessage": longText]),
+                trafficStats: .empty, sessionPolicy: .empty, isConnected: true, close: {},
+                progress: VPNConnectionProgress(propertyList: [
+                    "stage": "checkingOTP", "stageStartedAt": Date().timeIntervalSince1970,
+                    "events": (0..<20).map { ["stage": "checkingOTP", "time": Date().timeIntervalSince1970 + Double($0)] as [String: Any] }
+                ]), progressIsActive: true
+            ).frame(width: 432, height: 202)), CGSize(width: 432, height: 202))
+        ]
+        for (name, page, expected) in pages {
+            let host = NSHostingView(rootView: page.background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .light))
+            host.setFrameSize(expected)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+            XCTAssertEqual(host.fittingSize.width, expected.width, accuracy: 1, name)
+            XCTAssertEqual(host.fittingSize.height, expected.height, accuracy: 1, name)
+            if let directory = ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"],
+               let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("layout-\(name).png"))
+            }
+        }
+    }
+
+    @MainActor
+    func testOTPReceivesKeyboardFocusOnEveryNewChallenge() async throws {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        model.status.state = .connecting
+        model.otp = "246810"
+        let controller = NSHostingController(rootView: RootView(
+            model: model, menuBarOnly: .constant(true), presentation: .menuBar
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        for _ in 0..<2 {
+            model.status.state = .otpRequired
+            let focused = await waitUntil {
+                controller.view.layoutSubtreeIfNeeded()
+                guard let editor = window.firstResponder as? NSTextView,
+                      let field = editor.delegate as? NSTextField else { return false }
+                return field.placeholderString == "Код" && editor.string == "246810"
+            }
+            XCTAssertTrue(focused, "New OTP field should own the keyboard field editor")
+            model.status.state = .authenticating
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    func testHelperDeathAndStalledOTPProduceStageSpecificErrors() throws {
+        let start = Date(timeIntervalSince1970: 1000)
+        let progress = try XCTUnwrap(VPNConnectionProgress(propertyList: [
+            "stage": "checkingOTP", "stageStartedAt": 1000.0,
+            "events": [["stage": "checkingOTP", "time": 1000.0]]
+        ]))
+        XCTAssertThrowsError(try HelperSessionHealth.check(processAlive: false, progress: progress, startedAt: start, now: start)) {
+            XCTAssertTrue($0.localizedDescription.contains("неожиданно завершился"))
+            XCTAssertTrue($0.localizedDescription.contains("Проверка OTP"))
+            XCTAssertFalse($0 is AuthenticationFailure)
+        }
+        XCTAssertNoThrow(try HelperSessionHealth.check(processAlive: true, progress: progress, startedAt: start, now: start.addingTimeInterval(44)))
+        XCTAssertThrowsError(try HelperSessionHealth.check(processAlive: true, progress: progress, startedAt: start, now: start.addingTimeInterval(51)))
+        XCTAssertThrowsError(try HelperSessionHealth.check(processAlive: nil, progress: nil, startedAt: start, now: start.addingTimeInterval(11)))
+        let connected = VPNConnectionProgress(propertyList: ["stage": "connected", "stageStartedAt": 1000.0])
+        XCTAssertNoThrow(try HelperSessionHealth.check(processAlive: true, progress: connected, startedAt: start, now: start.addingTimeInterval(86400)))
+    }
+
+    @MainActor
+    func testHelperCrashAfterOTPStopsSpinnerWithoutAuthenticationCooldown() async throws {
+        let tunnel = RecordingTunnelClient()
+        let guardService = RecordingAttemptGuard()
+        let passwords = MemoryPasswordStore(password: "secret")
+        let service = VPNConnectionService(passwordStore: passwords, attemptGuard: guardService, tunnel: tunnel)
+        let model = AppModel(profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "test")), passwordStore: passwords, connectionService: service, helperInstaller: PrivilegedHelperInstaller(), statusPollInterval: .milliseconds(10))
+        await model.toggleConnection()
+        let progress = VPNConnectionProgress(propertyList: ["stage": "checkingOTP", "stageStartedAt": Date().timeIntervalSince1970])
+        tunnel.statusError = TunnelDiagnosticFailure(message: "Системный VPN-компонент неожиданно завершился", progress: progress)
+        let failed = await waitUntil { model.status.state == .failed }
+        XCTAssertTrue(failed)
+        XCTAssertEqual(model.status.progress?.stage, .checkingOTP)
+        XCTAssertTrue(model.errorMessage?.contains("Проверка OTP") == true)
+        XCTAssertTrue(guardService.recordedAttemptIDs.isEmpty)
+        XCTAssertFalse(model.status.isBusy)
+    }
+
+    func testProgressRejectsUnknownStagesAndDropsUnapprovedMetadata() throws {
+        XCTAssertNil(VPNConnectionProgress(propertyList: ["stage": "raw server text", "stageStartedAt": 1.0]))
+        let progress = try XCTUnwrap(VPNConnectionProgress(propertyList: [
+            "stage": "checkingOTP", "stageStartedAt": 1.0, "password": "fixture-secret",
+            "events": [["stage": "checkingOTP", "time": 1.0, "otp": "fixture-otp"], ["stage": "unknown", "time": 1.0]]
+        ]))
+        XCTAssertEqual(progress.events.count, 1)
+        XCTAssertFalse(String(describing: progress).contains("fixture-secret"))
+        XCTAssertFalse(String(describing: progress).contains("fixture-otp"))
+    }
+
+    @MainActor
+    private func makeCancellationModel(_ tunnel: RecordingTunnelClient) -> AppModel {
+        let passwords = MemoryPasswordStore(password: "secret")
+        return AppModel(
+            profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "test")),
+            passwordStore: passwords,
+            connectionService: VPNConnectionService(passwordStore: passwords, attemptGuard: RecordingAttemptGuard(), tunnel: tunnel),
+            helperInstaller: PrivilegedHelperInstaller(),
+            statusPollInterval: .milliseconds(10)
+        )
+    }
+
+    @MainActor
     private func waitUntil(
         timeout: Duration = .seconds(1),
         condition: @escaping @MainActor () -> Bool
@@ -398,20 +713,37 @@ private final class RecordingTunnelClient: TunnelClient {
     var connectionCount = 0
     var submittedOTPs: [String] = []
     var authenticationFailure = false
+    var statusError: Error?
     var attemptID: UUID?
+    var disconnectionCount = 0
+    var failDisconnect = false
+    var suspendConnect = false
+    var suspendDiscovery = false
+    var suspendStatus = false
+    var connectContinuation: CheckedContinuation<TunnelStatus, Error>?
+    var discoveryContinuation: CheckedContinuation<[VPNGroup], Error>?
+    var statusContinuation: CheckedContinuation<TunnelStatus, Error>?
     func discoverGroups(gateway: URL) async throws -> [VPNGroup] {
         discoveryCount += 1
+        if suspendDiscovery { return try await withCheckedThrowingContinuation { discoveryContinuation = $0 } }
         return discoveredGroups
     }
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus {
         connectionCount += 1
         attemptID = request.attemptID
         status.attemptID = request.attemptID
+        if suspendConnect { return try await withCheckedThrowingContinuation { connectContinuation = $0 } }
         return status
     }
     func submitOTP(_ value: String) async throws { submittedOTPs.append(value) }
-    func disconnect() async throws -> TunnelStatus { .disconnected }
+    func disconnect() async throws -> TunnelStatus {
+        disconnectionCount += 1
+        if failDisconnect { throw VPNError.helperFailure("No reply") }
+        return .disconnected
+    }
     func currentStatus() async throws -> TunnelStatus {
+        if suspendStatus { return try await withCheckedThrowingContinuation { statusContinuation = $0 } }
+        if let statusError { throw statusError }
         if authenticationFailure { throw AuthenticationFailure(message: "Rejected") }
         return status
     }

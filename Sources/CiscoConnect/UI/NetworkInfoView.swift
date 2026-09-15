@@ -13,6 +13,8 @@ struct ConnectionDetailsView: View {
     let sessionPolicy: VPNSessionPolicy
     let isConnected: Bool
     let close: () -> Void
+    var progress: VPNConnectionProgress? = nil
+    var progressIsActive = false
 
     @State private var page: Page = .summary
 
@@ -58,7 +60,9 @@ struct ConnectionDetailsView: View {
                 trafficStats: trafficStats,
                 sessionPolicy: sessionPolicy,
                 showNetwork: { page = .network },
-                showCertificate: { page = .certificate }
+                showCertificate: { page = .certificate },
+                progress: progress,
+                progressIsActive: progressIsActive
             )
         case .network:
             NetworkPolicyDetailsView(networkInfo: networkInfo)
@@ -88,10 +92,16 @@ private struct ConnectionSummaryView: View {
     let sessionPolicy: VPNSessionPolicy
     let showNetwork: () -> Void
     let showCertificate: () -> Void
+    var progress: VPNConnectionProgress? = nil
+    var progressIsActive = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 7) {
+                if let progress {
+                    ConnectionProgressView(progress: progress, isActive: progressIsActive)
+                    Divider()
+                }
                 if let notice = details.notice {
                     Label(notice, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -172,7 +182,7 @@ private struct ConnectionSummaryView: View {
     }
 }
 
-private struct NetworkPolicyDetailsView: View {
+struct NetworkPolicyDetailsView: View {
     let networkInfo: VPNNetworkInfo
 
     var body: some View {
@@ -202,7 +212,7 @@ private struct NetworkPolicyDetailsView: View {
     }
 }
 
-private struct CertificateDetailsView: View {
+struct CertificateDetailsView: View {
     let details: VPNConnectionDetails
 
     var body: some View {

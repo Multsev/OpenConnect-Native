@@ -47,6 +47,7 @@ if [[ $(plutil -extract LSUIElement raw "$app_path/Contents/Info.plist" 2>/dev/n
   echo "Window mode must remain visible by default." >&2
   exit 1
 fi
+./Tests/HelperCancellationTests.sh
 ./Scripts/build_openconnect_helper.sh "$app_path"
 ./Scripts/prepare_openconnect_runtime.sh "$app_path"
 find "$app_path/Contents/Frameworks" -type f -name '*.dylib' -exec codesign "${codesign_arguments[@]}" {} \;

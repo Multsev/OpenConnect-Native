@@ -9,6 +9,10 @@ struct SelectableReadOnlyField: NSViewRepresentable {
         configuredReadOnlyField(NSTextField())
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: nsView.intrinsicContentSize.height)
+    }
+
     func updateNSView(_ field: NSTextField, context: Context) {
         if field.stringValue != text {
             field.stringValue = text
@@ -24,6 +28,10 @@ struct SelectableReadOnlySecureField: NSViewRepresentable {
         configuredReadOnlyField(NSSecureTextField())
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSecureTextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: nsView.intrinsicContentSize.height)
+    }
+
     func updateNSView(_ field: NSSecureTextField, context: Context) {
         if field.stringValue != text {
             field.stringValue = text
@@ -32,6 +40,8 @@ struct SelectableReadOnlySecureField: NSViewRepresentable {
 }
 
 private func configuredReadOnlyField<Field: NSTextField>(_ field: Field) -> Field {
+    field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    field.setContentHuggingPriority(.defaultLow, for: .horizontal)
     field.isEditable = false
     field.isSelectable = true
     field.isBezeled = true

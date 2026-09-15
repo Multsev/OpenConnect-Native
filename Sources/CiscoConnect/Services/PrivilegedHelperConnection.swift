@@ -30,18 +30,27 @@ final class PrivilegedHelperConnection {
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            xpc_connection_send_message_with_reply(connection, message, .main) { reply in
+            // Both callbacks run on the main queue. The first result wins;
+            // cancelling XPC can itself deliver a late error reply.
+            let reply = HelperReplyCompletion(continuation: continuation)
+            let timeout = DispatchWorkItem {
+                reply.finish(.failure(VPNError.helperFailure("Системный VPN-компонент не ответил за 5 секунд. Повторите отключение или завершите приложение.")))
+                xpc_connection_cancel(connection)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+            xpc_connection_send_message_with_reply(connection, message, .main) { response in
+                timeout.cancel()
                 defer { xpc_connection_cancel(connection) }
-                guard xpc_get_type(reply) == XPC_TYPE_DICTIONARY else {
-                    continuation.resume(throwing: VPNError.helperFailure("Системный VPN-компонент недоступен"))
+                guard xpc_get_type(response) == XPC_TYPE_DICTIONARY else {
+                    reply.finish(.failure(VPNError.helperFailure("Системный VPN-компонент недоступен")))
                     return
                 }
-                guard xpc_dictionary_get_bool(reply, "accepted") else {
-                    let text = xpc_dictionary_get_string(reply, "message").map(String.init(cString:))
-                    continuation.resume(throwing: VPNError.helperFailure(text ?? "Системный VPN-компонент отклонил запрос"))
+                guard xpc_dictionary_get_bool(response, "accepted") else {
+                    let text = xpc_dictionary_get_string(response, "message").map(String.init(cString:))
+                    reply.finish(.failure(VPNError.helperFailure(text ?? "Системный VPN-компонент отклонил запрос")))
                     return
                 }
-                continuation.resume()
+                reply.finish(.success(()))
             }
         }
     }
@@ -51,5 +60,20 @@ final class PrivilegedHelperConnection {
         xpc_connection_set_event_handler(connection) { _ in }
         xpc_connection_activate(connection)
         return connection
+    }
+}
+
+/// Owned exclusively by the main queue used for XPC replies and deadlines.
+final class HelperReplyCompletion {
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(continuation: CheckedContinuation<Void, Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<Void, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(with: result)
     }
 }
