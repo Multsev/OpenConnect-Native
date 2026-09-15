@@ -16,6 +16,7 @@ struct RootView: View {
     @State private var showsMenuBarIntroduction = false
     @State private var showsHelperRemovalConfirmation = false
     @State private var showsPassword = false
+    @FocusState private var otpFocused: Bool
 
     var body: some View {
         Group {
@@ -26,22 +27,26 @@ struct RootView: View {
                     trafficStats: model.trafficStats,
                     sessionPolicy: model.status.sessionPolicy,
                     isConnected: model.status.state == .connected,
-                    close: { showsConnectionDetails = false }
+                    close: { showsConnectionDetails = false },
+                    progress: model.status.progress,
+                    progressIsActive: model.status.canDisconnect && model.status.state != .connected
                 )
+                .frame(height: 202)
             } else {
                 connectionView
             }
         }
         .tint(OpenConnectPalette.accent)
         .padding(14)
-        .frame(width: 460, height: 230, alignment: .topLeading)
-        .alert("VPN", isPresented: Binding(
+        .frame(width: 460, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .sheet(isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
         )) {
-            Button("Закрыть", role: .cancel) { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
+            VPNErrorView(message: model.errorMessage ?? "") {
+                model.errorMessage = nil
+            }
         }
         .alert("Приложение находится в строке меню", isPresented: $showsMenuBarIntroduction) {
             Button("Понятно", role: .cancel) {}
@@ -175,8 +180,19 @@ struct RootView: View {
                 if model.status.state == .otpRequired {
                     inputRow("OTP") {
                         HStack(spacing: 8) {
-                            SecureField("Код", text: $model.otp)
+                            TextField("Код", text: $model.otp)
                                 .textContentType(.oneTimeCode)
+                                .focused($otpFocused)
+                                .accessibilityIdentifier("otpCode")
+                                .task {
+                                    // Wait until the conditional field is mounted before
+                                    // moving the field editor into it. Polling must not
+                                    // repeatedly steal focus from another control.
+                                    await Task.yield()
+                                    guard !Task.isCancelled else { return }
+                                    otpFocused = true
+                                }
+                                .onDisappear { otpFocused = false }
                                 .onSubmit(submitOTP)
                             Button("Отправить", action: submitOTP)
                                 .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -206,7 +222,6 @@ struct RootView: View {
                     Button("Завершить приложение") {
                         NSApplication.shared.terminate(nil)
                     }
-                    .disabled(model.status.canDisconnect)
                 } label: {
                     Image(systemName: "gearshape")
                 }
@@ -244,10 +259,10 @@ struct RootView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(statusAccessibilityLabel(at: context.date))
-                    .help("Показать сведения о подключении")
+                    .help(model.status.progress.map { "\($0.stage.title). Нажмите для просмотра этапов" } ?? "Показать сведения о подключении")
                 }
                 Spacer(minLength: 8)
-                Button(model.status.canDisconnect ? "Отключиться" : "Подключиться") {
+                Button(model.connectionButtonTitle) {
                     Task { await model.toggleConnection() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -273,7 +288,7 @@ struct RootView: View {
     }
 
     private var connectButtonDisabled: Bool {
-        model.status.isBusy || model.isDiscoveringGroups || model.profile.normalized().gateway.isEmpty
+        model.connectionButtonDisabled
     }
 
     private var profileFieldsLocked: Bool {
@@ -288,7 +303,7 @@ struct RootView: View {
         if model.isDiscoveringGroups { return "Получение групп…" }
         switch model.status.state {
         case .disconnected: return "Отключено"
-        case .connecting, .authenticating: return "Подключение…"
+        case .connecting, .authenticating: return (model.status.progress?.stage.title ?? "Подготовка подключения") + "…"
         case .otpRequired: return "Введите OTP"
         case .connected:
             if model.status.sessionPolicy.hasExpired(at: date) { return "Сеанс завершается…" }

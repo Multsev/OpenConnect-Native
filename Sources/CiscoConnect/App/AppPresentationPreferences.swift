@@ -54,6 +54,32 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         false
     }
 
+    private var isTerminating = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else { return .terminateLater }
+        guard appModel.status.canDisconnect || appModel.status.isBusy || appModel.isDiscoveringGroups else {
+            return .terminateNow
+        }
+        isTerminating = true
+        Task {
+            let disconnected = await appModel.disconnect()
+            if !disconnected {
+                let alert = NSAlert()
+                alert.messageText = "Не удалось подтвердить отключение VPN"
+                alert.informativeText = "Системный компонент не ответил. Можно завершить приложение или остаться и повторить отключение."
+                alert.addButton(withTitle: "Завершить приложение")
+                alert.addButton(withTitle: "Остаться")
+                let shouldQuit = alert.runModal() == .alertFirstButtonReturn
+                isTerminating = false
+                sender.reply(toApplicationShouldTerminate: shouldQuit)
+            } else {
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,

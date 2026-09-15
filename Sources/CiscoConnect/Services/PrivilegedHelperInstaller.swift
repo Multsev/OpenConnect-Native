@@ -16,6 +16,7 @@ final class PrivilegedHelperInstaller {
     }
 
     func ensureInstalled(connection: PrivilegedHelperConnection) async throws {
+        try Task.checkCancellation()
         if installedVersion == bundledVersion {
             do {
                 // launchd can accept the Mach request just before the helper's
@@ -26,6 +27,7 @@ final class PrivilegedHelperInstaller {
                 }
                 return
             } catch {
+                try Task.checkCancellation()
                 // A stopped or stale daemon is repaired by the same one-time installer.
             }
         }
@@ -33,7 +35,9 @@ final class PrivilegedHelperInstaller {
         guard Bundle.main.bundleURL.path.hasPrefix("/Applications/") else {
             throw VPNError.appMustBeInstalled
         }
+        try Task.checkCancellation()
         try await install()
+        try Task.checkCancellation()
         try await availabilityWaiter.waitUntilAvailable {
             try await connection.ping()
         }

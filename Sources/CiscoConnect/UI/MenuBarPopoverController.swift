@@ -36,10 +36,14 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
-        popover.contentSize = NSSize(width: 460, height: 230)
-        popover.contentViewController = NSHostingController(
+        let controller = ContentSizedHostingController(
             rootView: MenuBarPopoverContent(model: model)
-        )
+        ) { [weak self] size in
+            guard let self, self.popover.contentSize != size else { return }
+            self.popover.contentSize = size
+        }
+        popover.contentViewController = controller
+        popover.contentSize = controller.view.fittingSize
     }
 
     private func updateStatusItem() {
@@ -89,5 +93,29 @@ private struct MenuBarPopoverContent: View {
             menuBarOnly: $menuBarOnly,
             presentation: .menuBar
         )
+    }
+}
+
+/// Propagates SwiftUI's fitted size after every AppKit layout, including
+/// observation-driven changes while the popover is already open.
+@MainActor
+final class ContentSizedHostingController<Content: View>: NSHostingController<Content> {
+    private let onSizeChange: (CGSize) -> Void
+    private var lastSize: CGSize = .zero
+
+    init(rootView: Content, onSizeChange: @escaping (CGSize) -> Void) {
+        self.onSizeChange = onSizeChange
+        super.init(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("Use init(rootView:onSizeChange:)") }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        let size = view.fittingSize
+        guard size.width > 0, size.height > 0, size != lastSize else { return }
+        lastSize = size
+        onSizeChange(size)
     }
 }

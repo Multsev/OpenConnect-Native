@@ -14,7 +14,6 @@ struct CiscoConnectApp: App {
                 presentation: .window
             )
         }
-        .defaultSize(width: 460, height: 230)
         .defaultPosition(.center)
         .windowResizability(.contentSize)
         .windowToolbarStyle(.unifiedCompact)

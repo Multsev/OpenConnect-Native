@@ -11,7 +11,11 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
     private var sessionDirectory: URL?
     private var statusFile: URL?
     private var otpFile: URL?
+    private var pidFile: URL?
+    private var sessionStartedAt = Date()
     private var attemptID: UUID?
+    private var generation = UUID()
+    private var startRequest: Task<Void, Error>?
 
     init(
         fileManager: FileManager = .default,
@@ -33,6 +37,10 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         discovery.arguments = [paths.request.path]
         try discovery.run()
         let completed = await wait(for: discovery, timeout: 45)
+        if Task.isCancelled {
+            if discovery.isRunning { discovery.terminate() }
+            throw CancellationError()
+        }
         guard completed else { discovery.terminate(); throw VPNError.authenticationTimeout }
         let snapshot = try readSnapshot(from: paths.status)
         if snapshot.state == "failed" { throw VPNError.helperFailure(snapshot.message) }
@@ -43,20 +51,31 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         guard sessionDirectory == nil else {
             return TunnelStatus(state: .connecting, message: "VPN connection is already starting", attemptID: request.attemptID)
         }
+        let currentGeneration = generation
         try await helperInstaller.ensureInstalled(connection: helperConnection)
+        try Task.checkCancellation()
+        guard generation == currentGeneration else { throw CancellationError() }
         let paths = try createSession(mode: "connect", gateway: request.gateway, request: request)
         let payload = try Data(contentsOf: paths.request)
         try? fileManager.removeItem(at: paths.request)
-        do {
-            try await helperConnection.connect(payload: payload)
-        } catch {
-            try? fileManager.removeItem(at: paths.directory)
-            throw error
-        }
+        sessionStartedAt = Date()
+        pidFile = paths.pid
         sessionDirectory = paths.directory
         statusFile = paths.status
         otpFile = paths.otp
         attemptID = request.attemptID
+        let start = Task { try await helperConnection.connect(payload: payload) }
+        startRequest = start
+        do {
+            try await start.value
+        } catch {
+            // Preserve the session until an explicit disconnect: a lost reply
+            // does not prove that the daemon rejected the start request.
+            if generation == currentGeneration { startRequest = nil }
+            throw TunnelStartUnconfirmed(message: error.localizedDescription)
+        }
+        guard generation == currentGeneration else { throw CancellationError() }
+        startRequest = nil
         return TunnelStatus(state: .authenticating, message: "Contacting VPN gateway", attemptID: request.attemptID)
     }
 
@@ -69,6 +88,11 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
     }
 
     func disconnect() async throws -> TunnelStatus {
+        generation = UUID()
+        // Order stop after the bounded start reply, even when Cancel was
+        // pressed while the daemon was accepting the connection.
+        if let startRequest { _ = await startRequest.result }
+        startRequest = nil
         if sessionDirectory != nil {
             try await helperConnection.disconnect()
         }
@@ -86,10 +110,14 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 throw VPNError.helperFailure("Не удалось прочитать состояние VPN helper")
             }
         } else if sessionDirectory != nil {
+            try await checkSessionHealth(progress: nil)
             return TunnelStatus(state: .connecting, message: "Запуск системного VPN-компонента", attemptID: attemptID)
         } else {
             cleanUp()
             throw VPNError.helperFailure("VPN helper завершился до создания соединения")
+        }
+        if !["failed", "authenticationFailed", "sessionExpired", "disconnected"].contains(snapshot.state) {
+            try await checkSessionHealth(progress: snapshot.progress)
         }
         switch snapshot.state {
         case "connected":
@@ -100,16 +128,17 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 networkInfo: snapshot.networkInfo,
                 sessionPolicy: snapshot.sessionPolicy,
                 connectionDetails: snapshot.connectionDetails,
-                trafficStats: snapshot.trafficStats
+                trafficStats: snapshot.trafficStats,
+                progress: snapshot.progress
             )
-        case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID)
-        case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID)
+        case "otpRequired": return TunnelStatus(state: .otpRequired, message: snapshot.message, attemptID: attemptID, progress: snapshot.progress)
+        case "authenticating": return TunnelStatus(state: .authenticating, message: snapshot.message, attemptID: attemptID, progress: snapshot.progress)
         case "authenticationFailed":
-            cleanUp()
-            throw AuthenticationFailure(message: snapshot.message)
+            try await stopFailedSession(progress: snapshot.progress)
+            throw AuthenticationFailure(message: snapshot.message, progress: snapshot.progress)
         case "failed":
-            cleanUp()
-            throw VPNError.helperFailure(snapshot.message)
+            try await stopFailedSession(progress: snapshot.progress)
+            throw TunnelDiagnosticFailure(message: snapshot.message, progress: snapshot.progress)
         case "sessionExpired":
             cleanUp()
             return TunnelStatus(
@@ -119,10 +148,11 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 networkInfo: snapshot.networkInfo,
                 sessionPolicy: snapshot.sessionPolicy,
                 connectionDetails: snapshot.connectionDetails,
-                trafficStats: snapshot.trafficStats
+                trafficStats: snapshot.trafficStats,
+                progress: snapshot.progress
             )
         case "disconnected": cleanUp(); return .disconnected
-        default: return TunnelStatus(state: .connecting, message: snapshot.message, attemptID: attemptID)
+        default: return TunnelStatus(state: .connecting, message: snapshot.message, attemptID: attemptID, progress: snapshot.progress)
         }
     }
 
@@ -168,7 +198,8 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
                 idleTimeout: (dictionary["idleTimeoutSeconds"] as? NSNumber)?.doubleValue
             ),
             connectionDetails: VPNConnectionDetails(propertyList: dictionary["connectionDetails"] as? [String: Any]),
-            trafficStats: VPNTrafficStats(propertyList: dictionary["trafficStats"] as? [String: Any])
+            trafficStats: VPNTrafficStats(propertyList: dictionary["trafficStats"] as? [String: Any]),
+            progress: VPNConnectionProgress(propertyList: dictionary["progress"] as? [String: Any])
         )
     }
 
@@ -180,8 +211,33 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
         return !process.isRunning
     }
 
+    private func checkSessionHealth(progress: VPNConnectionProgress?) async throws {
+        do {
+            try HelperSessionHealth.check(processAlive: helperProcessAlive, progress: progress, startedAt: sessionStartedAt, now: Date())
+        } catch {
+            try await stopFailedSession(progress: progress)
+            throw error
+        }
+    }
+
+    private func stopFailedSession(progress: VPNConnectionProgress?) async throws {
+        if helperProcessAlive != false {
+            do { try await helperConnection.disconnect() }
+            catch {
+                throw TunnelStartUnconfirmed(message: "Не удалось подтвердить остановку VPN после ошибки. Повторите отмену. " + error.localizedDescription, progress: progress)
+            }
+        }
+        cleanUp()
+    }
+
+    private var helperProcessAlive: Bool? {
+        guard let pidFile, let text = try? String(contentsOf: pidFile, encoding: .utf8),
+              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else { return nil }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
+
     private func cleanUp() {
-        attemptID = nil; statusFile = nil; otpFile = nil
+        attemptID = nil; statusFile = nil; otpFile = nil; pidFile = nil
         if let sessionDirectory {
             do {
                 try fileManager.removeItem(at: sessionDirectory)
@@ -212,4 +268,5 @@ private struct HelperSnapshot {
     let sessionPolicy: VPNSessionPolicy
     let connectionDetails: VPNConnectionDetails
     let trafficStats: VPNTrafficStats
+    let progress: VPNConnectionProgress?
 }
