@@ -49,13 +49,17 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             menuBarOnly: AppPresentationPreferences.isMenuBarOnly
         )
         menuBarPopoverController = MenuBarPopoverController(model: appModel)
-        let automation = AutomationController(model: appModel)
+        let automation = AutomationController(model: appModel, journal: VPNSessionJournal(directory: VPNSessionJournal.directory))
         do {
             try automation.start()
             automationController = automation
         } catch {
             NSLog("Local VPN automation unavailable (%@)", String(describing: type(of: error)))
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        automationController?.recordState()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

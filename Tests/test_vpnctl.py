@@ -49,6 +49,17 @@ class ControlCLITests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(result['ok'])
 
+    def test_otp_wait_ignores_old_otp_required_snapshot(self):
+        with patch('sys.stdin', io.StringIO('fixture-code\n')):
+            code, result, calls = self.run_command(['otp', '--attempt-id', 'attempt', '--wait', '5'], [
+                {'ok': True, 'accepted': True},
+                {'ok': True, 'state': 'otpRequired', 'operationPending': False},
+                {'ok': True, 'state': 'connected', 'operationPending': False},
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(result['state'], 'connected')
+        self.assertEqual(calls, 3)
+
 
 if __name__ == '__main__':
     unittest.main()

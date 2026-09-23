@@ -738,6 +738,64 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomationOTPSubmissionRejectsDuplicateAndHidesOldChallenge() throws {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let attempt = UUID()
+        model.status = TunnelStatus(state: .otpRequired, message: "OTP", attemptID: attempt)
+        let controller = AutomationController(model: model)
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: controller.handle(Data(#"{"command":"status"}"#.utf8))) as? [String: Any])
+        let challenge = try XCTUnwrap(status["challengeID"] as? String)
+        let request = try JSONSerialization.data(withJSONObject: ["command": "otp", "attemptID": attempt.uuidString,
+                                                                 "challengeID": challenge, "otp": "fixture-code"])
+        func decode(_ data: Data) throws -> [String: Any] { try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]) }
+        XCTAssertEqual(try decode(controller.handle(request))["ok"] as? Bool, true)
+        XCTAssertEqual(try decode(controller.handle(request))["ok"] as? Bool, false)
+        XCTAssertEqual(try decode(controller.handle(Data(#"{"command":"status"}"#.utf8)))["state"] as? String, "authenticating")
+        XCTAssertFalse(String(decoding: controller.handle(Data(#"{"command":"sessions"}"#.utf8)), as: UTF8.self).contains("fixture-code"))
+    }
+
+    @MainActor
+    func testAutomationRejectsExpiredChallengeAndDoesNotExposeStaleInfo() throws {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let attempt = UUID()
+        model.status = TunnelStatus(state: .otpRequired, message: "OTP", attemptID: attempt)
+        model.status.progress = VPNConnectionProgress(propertyList: ["stage": "waitingOTP", "stageStartedAt": Date().addingTimeInterval(-61).timeIntervalSince1970])
+        let controller = AutomationController(model: model)
+        let data = try JSONSerialization.data(withJSONObject: ["command": "otp", "attemptID": attempt.uuidString, "otp": "fixture-code"])
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: controller.handle(data)) as? [String: Any])
+        XCTAssertEqual(result["ok"] as? Bool, false)
+        model.status.state = .connected
+        model.status.sessionPolicy = VPNSessionPolicy(expirationDate: Date().addingTimeInterval(500), idleTimeout: 60)
+        var info = try XCTUnwrap(JSONSerialization.jsonObject(with: controller.handle(Data(#"{"command":"info"}"#.utf8))) as? [String: Any])
+        XCTAssertEqual(info["idleTimeoutSeconds"] as? Int, 60)
+        XCTAssertGreaterThan(info["remainingSeconds"] as? Int ?? 0, 490)
+        model.status.state = .disconnected
+        info = try XCTUnwrap(JSONSerialization.jsonObject(with: controller.handle(Data(#"{"command":"info"}"#.utf8))) as? [String: Any])
+        XCTAssertEqual(info["active"] as? Bool, false)
+        XCTAssertNil(info["receivedBytes"])
+    }
+
+    func testSessionJournalPersistsBoundsAndExpiresWithoutSecrets() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Date()
+        let journal = VPNSessionJournal(directory: directory, limit: 2)
+        let session = UUID()
+        let attempt = UUID()
+        journal.append(state: .connecting, stage: .contacting, attempt: attempt, appSession: session, hasError: false, now: now.addingTimeInterval(-40 * 86400))
+        journal.append(state: .connected, stage: .connected, attempt: attempt, appSession: session, hasError: false, now: now.addingTimeInterval(-2))
+        journal.append(state: .disconnecting, stage: nil, attempt: attempt, appSession: session, hasError: false, now: now.addingTimeInterval(-1))
+        journal.append(state: .disconnected, stage: nil, attempt: attempt, appSession: session, hasError: false, now: now)
+        let reloaded = VPNSessionJournal(directory: directory, limit: 2)
+        XCTAssertTrue(reloaded.storageAvailable)
+        XCTAssertEqual(reloaded.events.count, 2)
+        XCTAssertEqual(reloaded.events.last?.state, "disconnected")
+        let attrs = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("sessions.json").path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertTrue(reloaded.snapshot(now: now.addingTimeInterval(31 * 86400)).isEmpty)
+    }
+
+    @MainActor
     private func makeCancellationModel(_ tunnel: RecordingTunnelClient) -> AppModel {
         let passwords = MemoryPasswordStore(password: "secret")
         return AppModel(
