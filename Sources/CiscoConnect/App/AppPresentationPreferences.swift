@@ -41,6 +41,7 @@ enum AppPresentationPreferences {
 final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let appModel = AppModel.makeLive()
     private var menuBarPopoverController: MenuBarPopoverController?
+    private var automationController: AutomationController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
@@ -48,6 +49,13 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             menuBarOnly: AppPresentationPreferences.isMenuBarOnly
         )
         menuBarPopoverController = MenuBarPopoverController(model: appModel)
+        let automation = AutomationController(model: appModel)
+        do {
+            try automation.start()
+            automationController = automation
+        } catch {
+            NSLog("Local VPN automation unavailable (%@)", String(describing: type(of: error)))
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

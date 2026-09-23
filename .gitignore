@@ -6,3 +6,6 @@ Vendor/OpenConnect/include/
 Vendor/OpenConnect/lib/
 build/
 Releases/
+
+__pycache__/
+*.pyc

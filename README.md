@@ -252,3 +252,51 @@ Tests/               # доменные правила
 при упаковке DMG). Проверка хранения двух последних
 релизов: `./Tests/ReleasePipelineTests.sh`. Упаковочный pipeline также проверяет,
 что одноразовый IPC-запрос удаляется, а состояние privileged helper доступно GUI.
+
+## Управление через Codex (0.7.13)
+
+Локальный API в запущенном приложении принимает JSON-команды через Unix-сокет
+`~/Library/Caches/ocnative/control.sock`. Каталог имеет права `0700`, сокет —
+`0600`; сервер дополнительно проверяет UID клиента. Любой процесс вашего
+пользователя может управлять VPN. TCP-портов и прямого доступа CLI к root-helper нет.
+
+Установите навык из репозитория:
+
+```bash
+./Scripts/install_codex_skill.sh
+open '/Applications/OpenConnect Native.app'
+python3 skills/openconnect-native/scripts/vpnctl.py status
+python3 skills/openconnect-native/scripts/vpnctl.py connect --wait 55
+python3 skills/openconnect-native/scripts/vpnctl.py logs
+python3 skills/openconnect-native/scripts/vpnctl.py disconnect --wait 15
+```
+
+Требуется Python 3. Навык копируется в `${CODEX_HOME:-$HOME/.codex}/skills/openconnect-native`.
+В новом сеансе Codex можно попросить «включи VPN через OpenConnect Native»,
+«отключи VPN», «покажи статус и логи» или явно вызвать `$openconnect-native`.
+Профиль и пароль настраиваются в приложении; CLI не извлекает пароль из Keychain.
+
+`accepted` означает принятую команду, а не готовый туннель. `--wait` опрашивает
+статус и останавливается при подключении, ошибке или запросе OTP. Код завершения
+0 означает успешный ответ (включая промежуточный `otpRequired`), 1 — ошибку или
+таймаут, 2 — недоступность локального API. Таймаут CLI не отменяет подключение.
+OTP можно ввести в приложении либо скрытым запросом в терминале:
+
+```bash
+python3 skills/openconnect-native/scripts/vpnctl.py otp --attempt-id UUID_ИЗ_STATUS --wait 55
+```
+
+OTP принимается через stdin, не через аргументы; запрос идёт через сокет без
+промежуточного файла CLI. Действуют прежние ограничения попыток входа.
+Автоматического повторения пароля или OTP нет.
+
+Статус относится к сеансу текущего процесса приложения (`current_app_session`).
+Он не описывает другие VPN и не восстанавливает сеанс после аварийного завершения
+GUI. Логи — до 200 изменений состояния и последние 20 этапов подключения в
+памяти; после перезапуска история очищается. В них нет сырых сообщений сервера,
+шлюза, логина, пароля, OTP или cookie. Подробности ошибки доступны в окне GUI.
+
+Реализация: `Services/LocalControlServer.swift` обслуживает сокет,
+`App/AutomationController.swift` валидирует команды и вызывает `AppModel`.
+Новая команда добавляется в контроллер, затем в CLI и тесты. Тесты:
+`swift test`, `python3 -m unittest discover -s Tests -p 'test_*.py'`.
