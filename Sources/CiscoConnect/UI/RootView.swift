@@ -91,40 +91,15 @@ struct RootView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
                 inputRow("Шлюз") {
-                    if profileFieldsLocked {
-                        SelectableReadOnlyField(text: model.profile.gateway)
-                    } else {
-                        TextField("vpn.example.com", text: $model.profile.gateway)
-                            .textContentType(.URL)
-                    }
+                    ProfileTextField(text: $model.profile.gateway, placeholder: "vpn.example.com", editable: !profileFieldsLocked)
                 }
                 inputRow("Логин") {
-                    if profileFieldsLocked {
-                        SelectableReadOnlyField(text: model.profile.username)
-                    } else {
-                        TextField("Логин", text: $model.profile.username)
-                            .textContentType(.username)
-                    }
+                    ProfileTextField(text: $model.profile.username, placeholder: "Логин", editable: !profileFieldsLocked)
                 }
                 inputRow("Пароль") {
                     HStack(spacing: 6) {
-                        if profileFieldsLocked {
-                            if showsPassword {
-                                SelectableReadOnlyField(text: model.password)
-                            } else {
-                                SelectableReadOnlySecureField(text: model.password)
-                            }
-                        } else {
-                            Group {
-                                if showsPassword {
-                                    TextField("Пароль", text: $model.password)
-                                } else {
-                                    SecureField("Пароль", text: $model.password)
-                                }
-                            }
-                            .textContentType(.password)
-                        }
-
+                        ProfileTextField(text: $model.password, placeholder: "Пароль", editable: !profileFieldsLocked, secure: !showsPassword)
+                            .id(showsPassword)
                         Button {
                             showsPassword.toggle()
                         } label: {
@@ -139,41 +114,39 @@ struct RootView: View {
                 }
 
                 inputRow("Группа") {
-                    if profileFieldsLocked {
-                        SelectableReadOnlyField(text: model.profile.group)
-                    } else {
-                        HStack(spacing: 6) {
-                            if !model.availableGroups.isEmpty {
-                                Picker("Группа", selection: Binding(
-                                    get: { model.profile.group },
-                                    set: { model.selectGroup($0) }
-                                )) {
-                                    ForEach(model.availableGroups) { group in
-                                        Text(group.label).tag(group.id)
-                                    }
+                    HStack(spacing: 6) {
+                        if !model.availableGroups.isEmpty {
+                            Picker("Группа", selection: Binding(
+                                get: { model.profile.group },
+                                set: { model.selectGroup($0) }
+                            )) {
+                                ForEach(model.availableGroups) { group in
+                                    Text(group.label).tag(group.id)
                                 }
-                                .labelsHidden()
-                                .accessibilityLabel("Группа")
-                            } else {
-                                TextField("Группа", text: $model.profile.group)
                             }
+                            .labelsHidden()
+                            .accessibilityLabel("Группа")
+                            .disabled(profileFieldsLocked)
+                        } else {
+                            ProfileTextField(text: $model.profile.group, placeholder: "Группа", editable: !profileFieldsLocked)
+                        }
 
-                            Button {
-                                Task { await model.refreshGroups() }
-                            } label: {
+                        Button {
+                            Task { await model.refreshGroups() }
+                        } label: {
+                            Group {
                                 if model.isDiscoveringGroups {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .frame(width: 14, height: 14)
+                                    ProgressView().controlSize(.small)
                                 } else {
                                     Image(systemName: "arrow.clockwise")
                                 }
                             }
-                            .buttonStyle(.borderless)
-                            .disabled(model.isDiscoveringGroups)
-                            .help("Обновить группы")
-                            .accessibilityLabel("Обновить группы")
+                            .frame(width: 16, height: 16)
                         }
+                        .buttonStyle(.borderless)
+                        .disabled(profileFieldsLocked || model.isDiscoveringGroups)
+                        .help("Обновить группы")
+                        .accessibilityLabel("Обновить группы")
                     }
                 }
 

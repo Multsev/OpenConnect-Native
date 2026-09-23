@@ -490,6 +490,53 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testProfileFieldsKeepIdentityAndGeometryWhenConnectionLocksThem() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            for hasGroups in [false, true] {
+                let model = makeCancellationModel(RecordingTunnelClient())
+                if hasGroups { model.availableGroups = [VPNGroup(id: "staff", label: "Staff")] }
+                let host = NSHostingView(rootView: RootView(model: model, menuBarOnly: .constant(true), presentation: .menuBar)
+                    .background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
+                host.frame = NSRect(x: 0, y: 0, width: 460, height: 300)
+                func fields(_ view: NSView) -> [NSTextField] {
+                    (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+                }
+                var originals: [String: NSTextField] = [:]
+                var geometry: [String: CGRect] = [:]
+                for state in [TunnelState.disconnected, .connecting, .authenticating, .otpRequired, .connected, .disconnecting, .failed, .disconnected] {
+                    model.status = TunnelStatus(state: state, message: "Test", attemptID: nil)
+                    try await Task.sleep(for: .milliseconds(40))
+                    host.setFrameSize(host.fittingSize)
+                    host.layoutSubtreeIfNeeded()
+                    let profile = fields(host).filter { ["vpn.example.com", "Логин", "Пароль", "Группа"].contains($0.placeholderString ?? "") }
+                    XCTAssertEqual(profile.count, hasGroups ? 3 : 4)
+                    for field in profile {
+                        let key = try XCTUnwrap(field.placeholderString)
+                        let rect = field.convert(field.bounds, to: host)
+                        let fromTop = CGRect(x: rect.minX, y: host.isFlipped ? rect.minY : host.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+                        if let original = originals[key], let expected = geometry[key] {
+                            XCTAssertTrue(field === original, "Control replaced for \(key), \(state)")
+                            XCTAssertEqual(fromTop.minX, expected.minX, accuracy: 0.5)
+                            XCTAssertEqual(fromTop.minY, expected.minY, accuracy: 0.5)
+                            XCTAssertEqual(fromTop.width, expected.width, accuracy: 0.5)
+                            XCTAssertEqual(fromTop.height, expected.height, accuracy: 0.5)
+                        } else { originals[key] = field; geometry[key] = fromTop }
+                        XCTAssertEqual(field.isEditable, !state.locksProfileFields)
+                        XCTAssertTrue(field.isSelectable)
+                        XCTAssertTrue(field.isEnabled)
+                        XCTAssertEqual(field.bezelStyle, .roundedBezel)
+                    }
+                    if !hasGroups, let directory = ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"],
+                       let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: bitmap)
+                        try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("profile-\(scheme)-\(state.rawValue).png"))
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testMenuContentReportsHeightWhenOTPIsAddedAndRemoved() async throws {
         let model = makeCancellationModel(RecordingTunnelClient())
         let popover = NSPopover()
