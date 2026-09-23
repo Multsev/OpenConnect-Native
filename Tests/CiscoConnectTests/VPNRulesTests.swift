@@ -639,6 +639,58 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomationConnectIsIdempotentAndDisconnectIsExplicit() async throws {
+        let tunnel = RecordingTunnelClient()
+        let model = makeCancellationModel(tunnel)
+        let controller = AutomationController(model: model)
+        let connect = Data(#"{"command":"connect"}"#.utf8)
+        _ = controller.handle(connect)
+        _ = controller.handle(connect)
+        let started = await waitUntil { tunnel.connectionCount == 1 }
+        XCTAssertTrue(started)
+        _ = controller.handle(connect)
+        XCTAssertEqual(tunnel.connectionCount, 1)
+        XCTAssertEqual(tunnel.disconnectionCount, 0)
+        _ = controller.handle(Data(#"{"command":"disconnect"}"#.utf8))
+        let stopped = await waitUntil { model.status.state == .disconnected }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(tunnel.disconnectionCount, 1)
+    }
+
+    @MainActor
+    func testAutomationImmediateDisconnectCancelsQueuedConnect() async {
+        let tunnel = RecordingTunnelClient()
+        let model = makeCancellationModel(tunnel)
+        let controller = AutomationController(model: model)
+        _ = controller.handle(Data(#"{"command":"connect"}"#.utf8))
+        _ = controller.handle(Data(#"{"command":"disconnect"}"#.utf8))
+        let stopped = await waitUntil { tunnel.disconnectionCount == 1 }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(tunnel.connectionCount, 0)
+        XCTAssertEqual(model.status.state, .disconnected)
+    }
+
+    @MainActor
+    func testAutomationRedactsSecretsAndRejectsStaleOTP() throws {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        model.password = "fixture-private-password"
+        model.otp = "fixture-private-otp"
+        model.errorMessage = "server echoed fixture-private-password"
+        model.status = TunnelStatus(state: .otpRequired, message: "fixture-private-otp", attemptID: UUID())
+        let controller = AutomationController(model: model)
+        for command in ["status", "logs"] {
+            let result = controller.handle(Data("{\"command\":\"\(command)\"}".utf8))
+            XCTAssertFalse(String(decoding: result, as: UTF8.self).contains("fixture-private"))
+        }
+        let rejected = controller.handle(Data(#"{"command":"otp","attemptID":"stale","otp":"123456"}"#.utf8))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: rejected) as? [String: Any])
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(model.otp, "fixture-private-otp")
+        let malformed = controller.handle(Data("invalid".utf8))
+        XCTAssertTrue(String(decoding: malformed, as: UTF8.self).contains("invalid_request"))
+    }
+
+    @MainActor
     private func makeCancellationModel(_ tunnel: RecordingTunnelClient) -> AppModel {
         let passwords = MemoryPasswordStore(password: "secret")
         return AppModel(

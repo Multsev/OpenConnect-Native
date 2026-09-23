@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run unit tests
         run: swift test
+      - name: Test Codex CLI
+        run: python3 -m unittest discover -s Tests -p 'test_*.py'
       - name: Test release retention
         run: ./Tests/ReleasePipelineTests.sh
 
