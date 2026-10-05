@@ -63,8 +63,9 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     private func updateStatusItem() {
-        let appearance = MenuBarIconAppearance(tunnelState: model.status.state)
-        statusItem.button?.image = MenuBarStatusIcon.image(for: model.status.state)
+        let displayState: TunnelState = model.errorMessage == nil ? model.status.state : .failed
+        let appearance = MenuBarIconAppearance(tunnelState: displayState)
+        statusItem.button?.image = MenuBarStatusIcon.image(for: displayState)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.toolTip = appearance.accessibilityLabel
         statusItem.button?.setAccessibilityLabel(appearance.accessibilityLabel)
@@ -73,6 +74,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private func observeTunnelState() {
         withObservationTracking {
             _ = model.status.state
+            _ = model.errorMessage
         } onChange: { [weak self] in
             DispatchQueue.main.async { @MainActor [weak self] in
                 self?.updateStatusItem()
