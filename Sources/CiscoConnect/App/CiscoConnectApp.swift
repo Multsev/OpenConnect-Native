@@ -4,18 +4,10 @@ import SwiftUI
 @MainActor
 struct CiscoConnectApp: App {
     @NSApplicationDelegateAdaptor(ApplicationDelegate.self) private var applicationDelegate
-    @AppStorage(AppPresentationPreferences.menuBarOnlyKey) private var menuBarOnly = false
 
+    // The status-item controller owns the only application interface.
+    // A Settings scene keeps the SwiftUI lifecycle without creating a launch window.
     var body: some Scene {
-        Window("OpenConnect Native", id: "main") {
-            RootView(
-                model: applicationDelegate.appModel,
-                menuBarOnly: $menuBarOnly,
-                presentation: .window
-            )
-        }
-        .defaultPosition(.center)
-        .windowResizability(.contentSize)
-        .windowToolbarStyle(.unifiedCompact)
+        Settings { EmptyView() }
     }
 }

@@ -1,41 +1,5 @@
 import AppKit
-import Foundation
 import UserNotifications
-
-enum AppPresentationPreferences {
-    static let menuBarOnlyKey = "menuBarOnly"
-    static let menuBarIntroductionKey = "didShowMenuBarIntroduction"
-
-    static var isMenuBarOnly: Bool {
-        UserDefaults.standard.bool(forKey: menuBarOnlyKey)
-    }
-
-    @MainActor
-    static func applyActivationPolicy(menuBarOnly: Bool) {
-        NSApplication.shared.setActivationPolicy(menuBarOnly ? .accessory : .regular)
-        if !menuBarOnly {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-        }
-    }
-
-    @MainActor
-    static func hideMainWindow() {
-        mainWindow?.orderOut(nil)
-    }
-
-    @MainActor
-    static func showMainWindow() {
-        applyActivationPolicy(menuBarOnly: false)
-        mainWindow?.makeKeyAndOrderFront(nil)
-    }
-
-    @MainActor
-    private static var mainWindow: NSWindow? {
-        NSApplication.shared.windows.first { window in
-            window.title == "OpenConnect Native" && !(window is NSPanel)
-        }
-    }
-}
 
 @MainActor
 final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -45,9 +9,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
-        AppPresentationPreferences.applyActivationPolicy(
-            menuBarOnly: AppPresentationPreferences.isMenuBarOnly
-        )
+        NSApplication.shared.setActivationPolicy(.accessory)
         menuBarPopoverController = MenuBarPopoverController(model: appModel)
         let automation = AutomationController(model: appModel, journal: VPNSessionJournal(directory: VPNSessionJournal.directory))
         do {
@@ -56,6 +18,11 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         } catch {
             NSLog("Local VPN automation unavailable (%@)", String(describing: type(of: error)))
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        menuBarPopoverController?.showPopover()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
