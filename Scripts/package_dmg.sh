@@ -12,6 +12,7 @@ app_path="$build_root/Release/CiscoConnect.app"
 dmg_path="$release_root/OpenConnect-Native-${MARKETING_VERSION}.dmg"
 
 ./Scripts/generate_app_icon.swift App/Resources/OpenConnectNative.icns App/Brand/OpenConnectNative-AppIcon.png
+python3 Scripts/optimize_icon.py App/Resources/OpenConnectNative.icns
 ./Scripts/generate_xcode_project.sh
 rm -rf "$build_root"
 mkdir -p "$release_root"

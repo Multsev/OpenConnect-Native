@@ -14,6 +14,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private var deactivationObserver: NSObjectProtocol?
 
     var isShown: Bool { popover.isShown }
+    var hasLoadedContent: Bool { popover.contentViewController != nil }
 
     init(model: AppModel) {
         self.model = model
@@ -44,6 +45,10 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         popover.behavior = .applicationDefined
         popover.animates = false
         popover.delegate = self
+    }
+
+    private func loadPopoverContent() {
+        guard popover.contentViewController == nil else { return }
         let controller = ContentSizedHostingController(
             rootView: MenuBarPopoverContent(model: model)
         ) { [weak self] size in
@@ -84,6 +89,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     func showPopover() {
         guard let button = statusItem.button else { return }
         if !popover.isShown {
+            loadPopoverContent()
             updateStatusItem()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
@@ -94,6 +100,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
 
     func closePopover() {
         popover.close()
+        popover.contentViewController = nil
         removeCloseHandlers()
         statusItem.button?.highlight(false)
     }
@@ -139,6 +146,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        popover.contentViewController = nil
         removeCloseHandlers()
         statusItem.button?.highlight(false)
     }

@@ -493,6 +493,55 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testHiddenPopoverReleasesContentAndPreservesModel() {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let controller = MenuBarPopoverController(model: model)
+        XCTAssertFalse(controller.hasLoadedContent)
+        controller.showPopover()
+        XCTAssertTrue(controller.hasLoadedContent)
+        model.otp = "test-otp"
+        let profile = model.profile
+        controller.closePopover()
+        XCTAssertFalse(controller.hasLoadedContent)
+        controller.showPopover()
+        XCTAssertEqual(model.profile, profile)
+        XCTAssertEqual(model.otp, "test-otp")
+        controller.closePopover()
+    }
+
+    @MainActor
+    func testJournalRecordsRapidChangesWithoutPollingOrCommands() async {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let journal = VPNSessionJournal()
+        let controller = AutomationController(model: model, journal: journal)
+        model.status = TunnelStatus(state: .connecting, message: "Test", attemptID: UUID())
+        model.status.state = .authenticating
+        model.status.state = .otpRequired
+        model.status.state = .connected
+        model.status.state = .disconnected
+        XCTAssertEqual(journal.events.map(\.state), ["disconnected", "connecting", "authenticating", "otpRequired", "connected", "disconnected"])
+        let count = journal.events.count
+        controller.recordState()
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(journal.events.count, count)
+    }
+
+    @MainActor
+    func testHelperPollingStopsAfterDisconnectionAndDoesNotRunWhileIdle() async throws {
+        let tunnel = RecordingTunnelClient()
+        let model = makeCancellationModel(tunnel)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(tunnel.statusReadCount, 0)
+        await model.toggleConnection()
+        tunnel.status = .disconnected
+        let stopped = await waitUntil { model.status.state == .disconnected }
+        XCTAssertTrue(stopped)
+        let reads = tunnel.statusReadCount
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(tunnel.statusReadCount, reads)
+    }
+
+    @MainActor
     func testSlowPasswordReadDoesNotBlockMainActor() async throws {
         let store = SlowPasswordStore()
         let read = Task { try await PasswordStoreWorker.read(store) }
@@ -953,6 +1002,7 @@ private final class RecordingTunnelClient: TunnelClient {
     var discoveredGroups = [VPNGroup(id: "staff", label: "Staff")]
     var discoveryCount = 0
     var connectionCount = 0
+    var statusReadCount = 0
     var submittedOTPs: [String] = []
     var authenticationFailure = false
     var statusError: Error?
@@ -984,6 +1034,7 @@ private final class RecordingTunnelClient: TunnelClient {
         return .disconnected
     }
     func currentStatus() async throws -> TunnelStatus {
+        statusReadCount += 1
         if suspendStatus { return try await withCheckedThrowingContinuation { statusContinuation = $0 } }
         if let statusError { throw statusError }
         if authenticationFailure { throw AuthenticationFailure(message: "Rejected") }
