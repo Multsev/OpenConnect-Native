@@ -11,12 +11,17 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         UNUserNotificationCenter.current().delegate = self
         NSApplication.shared.setActivationPolicy(.accessory)
         menuBarPopoverController = MenuBarPopoverController(model: appModel)
-        let automation = AutomationController(model: appModel, journal: VPNSessionJournal(directory: VPNSessionJournal.directory))
-        do {
-            try automation.start()
-            automationController = automation
-        } catch {
-            NSLog("Local VPN automation unavailable (%@)", String(describing: type(of: error)))
+        Task {
+            let journal = await Task.detached(priority: .utility) {
+                VPNSessionJournal(directory: VPNSessionJournal.directory)
+            }.value
+            let automation = AutomationController(model: appModel, journal: journal)
+            do {
+                try automation.start()
+                automationController = automation
+            } catch {
+                NSLog("Local VPN automation unavailable (%@)", String(describing: type(of: error)))
+            }
         }
     }
 
@@ -37,12 +42,10 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isTerminating else { return .terminateLater }
-        guard appModel.status.canDisconnect || appModel.status.isBusy || appModel.isDiscoveringGroups else {
-            return .terminateNow
-        }
         isTerminating = true
         Task {
-            let disconnected = await appModel.disconnect()
+            let needsDisconnect = appModel.status.canDisconnect || appModel.status.isBusy || appModel.isDiscoveringGroups
+            let disconnected = needsDisconnect ? await appModel.disconnect() : true
             if !disconnected {
                 let alert = NSAlert()
                 alert.messageText = "Не удалось подтвердить отключение VPN"
@@ -51,12 +54,19 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
                 alert.addButton(withTitle: "Остаться")
                 let shouldQuit = alert.runModal() == .alertFirstButtonReturn
                 isTerminating = false
+                if shouldQuit { await flushJournal() }
                 sender.reply(toApplicationShouldTerminate: shouldQuit)
             } else {
+                await flushJournal()
                 sender.reply(toApplicationShouldTerminate: true)
             }
         }
         return .terminateLater
+    }
+
+    private func flushJournal() async {
+        automationController?.recordState()
+        await automationController?.flushJournal()
     }
 
     nonisolated func userNotificationCenter(

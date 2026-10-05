@@ -2,8 +2,7 @@ import Foundation
 
 /// IPC client for the bundled libopenconnect helper. Authentication forms are
 /// processed by the helper; the GUI receives only typed state and group choices.
-@MainActor
-final class OpenConnectProcessTunnelClient: TunnelClient {
+actor OpenConnectProcessTunnelClient: TunnelClient {
     private let fileManager: FileManager
     private let temporaryDirectory: URL
     private let helperConnection: PrivilegedHelperConnection
@@ -18,12 +17,11 @@ final class OpenConnectProcessTunnelClient: TunnelClient {
     private var startRequest: Task<Void, Error>?
 
     init(
-        fileManager: FileManager = .default,
         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
         helperConnection: PrivilegedHelperConnection,
         helperInstaller: PrivilegedHelperInstaller
     ) {
-        self.fileManager = fileManager
+        self.fileManager = FileManager()
         self.temporaryDirectory = temporaryDirectory
         self.helperConnection = helperConnection
         self.helperInstaller = helperInstaller

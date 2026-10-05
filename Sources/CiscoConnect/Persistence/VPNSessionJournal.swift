@@ -17,6 +17,7 @@ final class VPNSessionJournal {
     private(set) var events: [Event] = []
     private(set) var storageAvailable = true
     private let limit: Int
+    private let persistenceQueue = DispatchQueue(label: "com.max.ciscoconnect.journal", qos: .utility)
     private let retention: TimeInterval = 30 * 24 * 3600
 
     init(directory: URL? = nil, limit: Int = 2000) {
@@ -75,16 +76,29 @@ final class VPNSessionJournal {
         }.suffix(limit))
     }
 
+    func flush() async {
+        await withCheckedContinuation { continuation in
+            persistenceQueue.async { continuation.resume() }
+        }
+    }
+
     private func persist() {
         guard let directory else { return }
-        do {
-            let manager = FileManager.default
-            try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-            let file = directory.appendingPathComponent("sessions.json")
-            try JSONEncoder().encode(events).write(to: file, options: .atomic)
-            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-            storageAvailable = true
-        } catch { storageAvailable = false }
+        let snapshot = events
+        // Writes are ordered, so a slow older snapshot cannot replace a newer one.
+        persistenceQueue.async { [weak self] in
+            var succeeded = true
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                let manager = FileManager.default
+                try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+                let file = directory.appendingPathComponent("sessions.json")
+                try data.write(to: file, options: .atomic)
+                try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            } catch { succeeded = false }
+            let result = succeeded
+            DispatchQueue.main.async { self?.storageAvailable = result }
+        }
     }
 }

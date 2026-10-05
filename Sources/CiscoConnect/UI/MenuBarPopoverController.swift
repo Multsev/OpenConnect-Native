@@ -9,6 +9,11 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private let model: AppModel
     private let statusItem: NSStatusItem
     private let popover: NSPopover
+    private var localEventMonitor: Any?
+    private var globalEventMonitor: Any?
+    private var deactivationObserver: NSObjectProtocol?
+
+    var isShown: Bool { popover.isShown }
 
     init(model: AppModel) {
         self.model = model
@@ -21,6 +26,9 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     deinit {
+        if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
+        if let globalEventMonitor { NSEvent.removeMonitor(globalEventMonitor) }
+        if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -33,8 +41,8 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     private func configurePopover() {
-        popover.behavior = .transient
-        popover.animates = true
+        popover.behavior = .applicationDefined
+        popover.animates = false
         popover.delegate = self
         let controller = ContentSizedHostingController(
             rootView: MenuBarPopoverContent(model: model)
@@ -57,17 +65,17 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private func observeTunnelState() {
         withObservationTracking {
             _ = model.status.state
-        } onChange: { [self] in
-            DispatchQueue.main.async { @MainActor in
-                self.updateStatusItem()
-                self.observeTunnelState()
+        } onChange: { [weak self] in
+            DispatchQueue.main.async { @MainActor [weak self] in
+                self?.updateStatusItem()
+                self?.observeTunnelState()
             }
         }
     }
 
     @objc private func togglePopover() {
         if popover.isShown {
-            popover.performClose(nil)
+            closePopover()
         } else {
             showPopover()
         }
@@ -81,9 +89,57 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         }
         popover.contentViewController?.view.window?.makeKey()
         button.highlight(true)
+        installCloseHandlers()
+    }
+
+    func closePopover() {
+        popover.close()
+        removeCloseHandlers()
+        statusItem.button?.highlight(false)
+    }
+
+    private func installCloseHandlers() {
+        guard localEventMonitor == nil else { return }
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            return self.handleLocalEvent(event)
+        }
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePopover()
+        }
+        deactivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.closePopover() }
+        }
+    }
+
+    func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
+        if event.type == .keyDown {
+            if event.keyCode == 53 { closePopover(); return nil }
+        } else if event.window !== statusItem.button?.window,
+                  !containsPopoverWindow(event.window) {
+            closePopover()
+        }
+        return event
+    }
+
+    private func containsPopoverWindow(_ window: NSWindow?) -> Bool {
+        guard let window, let panel = popover.contentViewController?.view.window else { return false }
+        return window === panel || window.sheetParent === panel || window.parent === panel
+    }
+
+    private func removeCloseHandlers() {
+        if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
+        if let globalEventMonitor { NSEvent.removeMonitor(globalEventMonitor) }
+        if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
+        localEventMonitor = nil
+        globalEventMonitor = nil
+        deactivationObserver = nil
     }
 
     func popoverDidClose(_ notification: Notification) {
+        removeCloseHandlers()
         statusItem.button?.highlight(false)
     }
 }
@@ -103,6 +159,7 @@ private struct MenuBarPopoverContent: View {
 final class ContentSizedHostingController<Content: View>: NSHostingController<Content> {
     private let onSizeChange: (CGSize) -> Void
     private var lastSize: CGSize = .zero
+    private var sizeUpdateScheduled = false
 
     init(rootView: Content, onSizeChange: @escaping (CGSize) -> Void) {
         self.onSizeChange = onSizeChange
@@ -117,6 +174,14 @@ final class ContentSizedHostingController<Content: View>: NSHostingController<Co
         let size = view.fittingSize
         guard size.width > 0, size.height > 0, size != lastSize else { return }
         lastSize = size
-        onSizeChange(size)
+        guard !sizeUpdateScheduled else { return }
+        sizeUpdateScheduled = true
+        // Coalesce changes after layout returns; resizing during layout can
+        // recursively trigger AppKit/SwiftUI geometry updates.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.sizeUpdateScheduled = false
+            self.onSizeChange(self.lastSize)
+        }
     }
 }
