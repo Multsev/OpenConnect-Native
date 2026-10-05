@@ -2,15 +2,16 @@ import SwiftUI
 
 /// A compact, timer-free activity indicator for the VPN connection phase.
 struct PingPongConnectionIndicator: View {
+    @Environment(\.panelIsVisible) private var isVisible
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion || !isVisible)) { context in
             Canvas { graphicsContext, size in
                 drawFrame(
                     in: &graphicsContext,
                     size: size,
-                    phase: reduceMotion ? 0 : phase(at: context.date)
+                    phase: reduceMotion || !isVisible ? 0 : phase(at: context.date)
                 )
             }
         }

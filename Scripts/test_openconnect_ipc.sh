@@ -62,6 +62,7 @@ plutil -insert statusPath -string "$status_path" "$request_path"
 plutil -insert otpPath -string "$otp_path" "$request_path"
 plutil -insert pidPath -string "$pid_path" "$request_path"
 plutil -insert vpncScript -string /dev/null "$request_path"
+plutil -convert binary1 "$request_path"
 chmod 600 "$request_path"
 
 "$helper" "$request_path" >/dev/null 2>&1 || true

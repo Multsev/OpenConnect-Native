@@ -12,8 +12,8 @@ struct ConnectionProgressView: View {
             Text(progress.stage.title)
                 .font(.callout.weight(.medium))
             if isActive, let timeout = progress.stage.timeout {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text("Ожидание: \(max(0, Int(context.date.timeIntervalSince(progress.startedAt)))) с · предел \(Int(timeout)) с")
+                VisibleTimeline(interval: 1) { date in
+                    Text("Ожидание: \(max(0, Int(date.timeIntervalSince(progress.startedAt)))) с · предел \(Int(timeout)) с")
                         .font(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)

@@ -6,10 +6,14 @@ final class PrivilegedHelperConnection {
     static let serviceName = "com.max.openconnectnative.helper"
 
     func connect(payload: Data) async throws {
+        let started = PerformanceMeasurements.start()
+        defer { PerformanceMeasurements.shared.record(.helperStart, since: started) }
         try await send(command: "connect", payload: payload)
     }
 
     func disconnect() async throws {
+        let started = PerformanceMeasurements.start()
+        defer { PerformanceMeasurements.shared.record(.helperStop, since: started) }
         try await send(command: "disconnect", payload: nil)
     }
 

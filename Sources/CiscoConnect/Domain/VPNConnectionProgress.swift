@@ -37,6 +37,16 @@ struct VPNConnectionProgress: Equatable, Sendable {
     let startedAt: Date
     let events: [Event]
 
+    /// Completed intervals from the helper's own stage timestamps, including
+    /// user OTP wait as a separate stage rather than calling it network latency.
+    var completedStageTimings: [[String: Any]] {
+        zip(events, events.dropFirst()).compactMap { current, next in
+            let elapsed = next.time.timeIntervalSince(current.time)
+            guard elapsed >= 0 else { return nil }
+            return ["stage": current.stage.rawValue, "milliseconds": elapsed * 1000]
+        }
+    }
+
     init?(propertyList: [String: Any]?) {
         guard let propertyList,
               let raw = propertyList["stage"] as? String, let stage = Stage(rawValue: raw),

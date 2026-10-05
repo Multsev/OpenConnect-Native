@@ -118,20 +118,39 @@ final class AppModel {
         return profile.normalized().gateway.isEmpty
     }
 
+    /// Changes visible state in the click handler before scheduling VPN work.
+    func connectionButtonPressed() {
+        let started = PerformanceMeasurements.start()
+        guard status.state != .disconnecting else { return }
+        if status.canDisconnect || isDiscoveringGroups {
+            status = TunnelStatus(state: .disconnecting, message: "Отключение", attemptID: status.attemptID)
+            Task { _ = await disconnect() }
+        } else {
+            _ = beginConnection()
+        }
+        PerformanceMeasurements.shared.record(.buttonFeedback, since: started)
+    }
+
     func toggleConnection() async {
         guard status.state != .disconnecting else { return }
         if status.canDisconnect || isDiscoveringGroups {
             _ = await disconnect()
-            return
+        } else {
+            await beginConnection().value
         }
+    }
+
+    private func beginConnection() -> Task<Void, Never> {
         errorMessage = nil
         let id = UUID()
         operationID = id
         status = TunnelStatus(state: .connecting, message: "Подготовка подключения", attemptID: nil)
-        let task = Task { await self.startConnection(operation: id) }
+        let task = Task {
+            await self.startConnection(operation: id)
+            if self.operationID == id { self.connectionTask = nil }
+        }
         connectionTask = task
-        await task.value
-        if operationID == id { connectionTask = nil }
+        return task
     }
 
     /// Invalidates in-flight UI work before awaiting the transport. A late
@@ -255,7 +274,8 @@ final class AppModel {
         statusPollTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: self.statusPollInterval)
+                let interval = self.status.state == .connected ? self.statusPollInterval : min(self.statusPollInterval, .milliseconds(250))
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled else { return }
                 let updated: TunnelStatus
                 do { updated = try await self.connectionService.refreshStatus() }
