@@ -32,16 +32,16 @@ struct RootView: View {
                         }
                     } else {
                         header
+                        statusView
+                        if model.status.state == .otpRequired { otpView }
+                        actions
                     }
-                    statusView
-                    if model.status.state == .otpRequired { otpView }
-                    actions
                 }
             }
         }
         .tint(OpenConnectPalette.accent)
         .padding(14)
-        .frame(width: 460, alignment: .topLeading)
+        .frame(width: panelWidth, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .alert("Удалить системный компонент?", isPresented: $showsHelperRemovalConfirmation) {
             Button("Удалить", role: .destructive) { Task { await model.uninstallSystemHelper() } }
@@ -49,6 +49,12 @@ struct RootView: View {
         } message: {
             Text("VPN будет отключён. macOS один раз запросит пароль администратора и удалит helper и LaunchDaemon.")
         }
+    }
+
+    var panelWidth: CGFloat {
+        if showsConnectionDetails { return 400 }
+        if !showsAbout && (showsProfileSettings || needsConfiguration) { return 360 }
+        return 320
     }
 
     var needsConfiguration: Bool {
@@ -135,7 +141,6 @@ struct RootView: View {
 
     private var actions: some View {
         HStack {
-            if showsProfileSettings || needsConfiguration { settingsMenu }
             Button("Сведения") { showsConnectionDetails = true }.buttonStyle(.borderless)
             Spacer()
             if model.status.state == .connected {

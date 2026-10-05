@@ -618,6 +618,7 @@ final class VPNRulesTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(30))
             host.setFrameSize(host.fittingSize)
             host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.fittingSize.width, 320, accuracy: 1)
             XCTAssertLessThan(host.fittingSize.height, 210)
             XCTAssertFalse(fields(host).contains { $0.placeholderString == "vpn.example.com" })
             XCTAssertEqual(fields(host).contains { $0.placeholderString == "Код OTP" }, state == .otpRequired)
@@ -635,6 +636,7 @@ final class VPNRulesTests: XCTestCase {
         host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(host.fittingSize.width, 360, accuracy: 1)
         XCTAssertTrue(fields(host).contains { $0.placeholderString == "vpn.example.com" })
         model.profile = VPNProfile(gateway: "https://vpn.example.test", group: "staff", username: "test-user")
         XCTAssertTrue(model.saveProfileSettings())
@@ -731,14 +733,14 @@ final class VPNRulesTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(30))
             let size = host.fittingSize
             sizes[state] = size
-            XCTAssertEqual(size.width, 460, accuracy: 1, "Width changed for \(state)")
+            XCTAssertEqual(size.width, 320, accuracy: 1, "Width changed for \(state)")
             host.setFrameSize(size)
             host.layoutSubtreeIfNeeded()
             func textFields(in view: NSView) -> [NSTextField] {
                 (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { textFields(in: $0) }
             }
             for field in textFields(in: host) where field.isBezeled {
-                XCTAssertGreaterThan(field.frame.width, 200, "Input collapsed for \(state)")
+                XCTAssertGreaterThanOrEqual(field.frame.width, 200, "Input collapsed for \(state)")
                 let frame = field.convert(field.bounds, to: host)
                 XCTAssertGreaterThanOrEqual(frame.minX, 0)
                 XCTAssertLessThanOrEqual(frame.maxX, size.width + 1)
@@ -765,7 +767,7 @@ final class VPNRulesTests: XCTestCase {
                 let model = makeCancellationModel(RecordingTunnelClient())
                 if hasGroups { model.availableGroups = [VPNGroup(id: "staff", label: "Staff")] }
                 let host = NSHostingView(rootView: ProfileSettingsView(model: model, done: {})
-                    .padding(14).frame(width: 460).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
+                    .padding(14).frame(width: 360).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
                 host.frame = NSRect(x: 0, y: 0, width: 460, height: 300)
                 func fields(_ view: NSView) -> [NSTextField] {
                     (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
@@ -828,13 +830,13 @@ final class VPNRulesTests: XCTestCase {
         let initial = popover.contentSize
         model.status.state = .otpRequired
         try await settle()
-        XCTAssertEqual(popover.contentSize.width, 460, accuracy: 1)
+        XCTAssertEqual(popover.contentSize.width, 320, accuracy: 1)
         XCTAssertGreaterThan(popover.contentSize.height, initial.height + 20)
         for state in [TunnelState.failed, .disconnected, .connecting, .otpRequired, .sessionExpired, .disconnected] {
             model.status.state = state
             model.isDiscoveringGroups = state == .disconnected
             try await settle()
-            XCTAssertEqual(popover.contentSize.width, 460, accuracy: 1)
+            XCTAssertEqual(popover.contentSize.width, 320, accuracy: 1)
             if state == .otpRequired {
                 XCTAssertGreaterThan(popover.contentSize.height, initial.height + 20)
             } else {

@@ -83,6 +83,10 @@ struct ProfileSettingsView: View {
                 Text("Параметры можно изменить после отключения")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let error = model.errorMessage {
+                Text(VPNErrorSummary.text(for: error))
+                    .font(.caption).foregroundStyle(.red)
+            }
         }
     }
 
