@@ -597,6 +597,52 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testCompactPanelHidesProfileFieldsAndFirstLaunchShowsSettings() async throws {
+        _ = NSApplication.shared
+        if ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"] != nil {
+            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            NSApplication.shared.applicationIconImage = NSImage(contentsOf: root.appendingPathComponent("App/Resources/OpenConnectNative.icns"))
+        }
+        let model = makeCancellationModel(RecordingTunnelClient())
+        model.profile = VPNProfile(gateway: "https://vpn.example.test", group: "staff", username: "test-user")
+        func fields(_ view: NSView) -> [NSTextField] {
+            (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
+        }
+        for state in [TunnelState.disconnected, .connected, .otpRequired, .failed] {
+            model.status.state = state
+            model.status.sessionPolicy = state == .connected ? VPNSessionPolicy(expirationDate: Date().addingTimeInterval(86400)) : .empty
+            model.errorMessage = state == .failed ? "Ошибка обмена со шлюзом" : nil
+            let host = NSHostingView(rootView: RootView(model: model).background(Color(nsColor: .windowBackgroundColor)))
+            host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+            host.setFrameSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertLessThan(host.fittingSize.height, 210)
+            XCTAssertFalse(fields(host).contains { $0.placeholderString == "vpn.example.com" })
+            XCTAssertEqual(fields(host).contains { $0.placeholderString == "Код OTP" }, state == .otpRequired)
+            if let directory = ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"],
+               let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("compact-\(state.rawValue).png"))
+            }
+        }
+        model.profile = VPNProfile()
+        model.errorMessage = nil
+        XCTAssertTrue(RootView(model: model).needsConfiguration)
+        XCTAssertFalse(model.saveProfileSettings())
+        let host = NSHostingView(rootView: RootView(model: model))
+        host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(fields(host).contains { $0.placeholderString == "vpn.example.com" })
+        model.profile = VPNProfile(gateway: "https://vpn.example.test", group: "staff", username: "test-user")
+        XCTAssertTrue(model.saveProfileSettings())
+        XCTAssertFalse(RootView(model: model).needsConfiguration)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
     func testCachedPanelOpenTimings() {
         _ = NSApplication.shared
         let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
@@ -699,7 +745,7 @@ final class VPNRulesTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(frame.minY, 0)
                 XCTAssertLessThanOrEqual(frame.maxY, size.height + 1)
             }
-            XCTAssertGreaterThan(size.height, 200)
+            XCTAssertGreaterThan(size.height, 90)
             XCTAssertLessThan(size.height, 400)
             if let directory = ProcessInfo.processInfo.environment["OPENCONNECT_LAYOUT_SNAPSHOTS"],
                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
@@ -718,8 +764,8 @@ final class VPNRulesTests: XCTestCase {
             for hasGroups in [false, true] {
                 let model = makeCancellationModel(RecordingTunnelClient())
                 if hasGroups { model.availableGroups = [VPNGroup(id: "staff", label: "Staff")] }
-                let host = NSHostingView(rootView: RootView(model: model)
-                    .background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
+                let host = NSHostingView(rootView: ProfileSettingsView(model: model, done: {})
+                    .padding(14).frame(width: 460).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
                 host.frame = NSRect(x: 0, y: 0, width: 460, height: 300)
                 func fields(_ view: NSView) -> [NSTextField] {
                     (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
@@ -853,7 +899,7 @@ final class VPNRulesTests: XCTestCase {
                 controller.view.layoutSubtreeIfNeeded()
                 guard let editor = window.firstResponder as? NSTextView,
                       let field = editor.delegate as? NSTextField else { return false }
-                return field.placeholderString == "Код" && editor.string == "246810"
+                return field.placeholderString == "Код OTP" && editor.string == "246810"
             }
             XCTAssertTrue(focused, "New OTP field should own the keyboard field editor")
             model.status.state = .authenticating
