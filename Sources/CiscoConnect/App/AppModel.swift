@@ -9,12 +9,13 @@ final class AppModel {
     var otp = ""
     var availableGroups: [VPNGroup] = []
     var isDiscoveringGroups = false
-    var status: TunnelStatus = .disconnected
+    var status: TunnelStatus = .disconnected { didSet { onConnectionStateChange?() } }
     var networkInfo: VPNNetworkInfo = .empty
     var connectionDetails: VPNConnectionDetails = .empty
     var trafficStats: VPNTrafficStats = .empty
     private(set) var hasStoredPassword = false
-    var errorMessage: String?
+    var errorMessage: String? { didSet { onConnectionStateChange?() } }
+    @ObservationIgnored var onConnectionStateChange: (() -> Void)?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var operationID = UUID()

@@ -5,7 +5,6 @@ import Foundation
 final class AutomationController {
     private let model: AppModel
     private let server = LocalControlServer()
-    private var timer: Timer?
     private var commandGeneration = UUID()
     private var connecting = false
     private var stopping = false
@@ -21,6 +20,8 @@ final class AutomationController {
     init(model: AppModel, journal: VPNSessionJournal = VPNSessionJournal()) {
         self.model = model
         self.journal = journal
+        model.onConnectionStateChange = { [weak self] in self?.recordState() }
+        recordState()
     }
 
     func start() throws {
@@ -28,9 +29,7 @@ final class AutomationController {
             guard let self else { return Data("{\"ok\":false,\"error\":\"app_unavailable\"}".utf8) }
             return await self.handle(data)
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.recordState() }
-        }
+
     }
 
     func recordState() {
