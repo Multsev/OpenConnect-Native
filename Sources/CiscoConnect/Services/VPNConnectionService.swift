@@ -33,7 +33,9 @@ final class VPNConnectionService {
         operationID = operation
         let currentTime = now()
         if let retryDate = attemptGuard.retryDate(now: currentTime) { throw VPNError.retryBlocked(retryDate) }
-        let password = passwordOverride?.isEmpty == false ? passwordOverride! : try passwordStore.read()
+        let password = passwordOverride?.isEmpty == false ? passwordOverride! : try await PasswordStoreWorker.read(passwordStore)
+        try Task.checkCancellation()
+        guard operationID == operation else { throw CancellationError() }
         let errors = profile.validationErrors(hasStoredPassword: password?.isEmpty == false)
         if let firstError = errors.first { throw VPNError.invalidProfile(firstError) }
         guard let password, !password.isEmpty else { throw VPNError.invalidProfile("Save the primary VPN password in Keychain.") }

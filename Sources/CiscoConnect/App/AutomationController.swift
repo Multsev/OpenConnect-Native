@@ -50,6 +50,8 @@ final class AutomationController {
         events = Array(events.suffix(200))
     }
 
+    func flushJournal() async { await journal.flush() }
+
     func handle(_ data: Data) -> Data {
         let response: [String: Any]
         do {

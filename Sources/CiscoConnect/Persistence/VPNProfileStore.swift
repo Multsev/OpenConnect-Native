@@ -81,3 +81,22 @@ struct KeychainError: LocalizedError {
     var errorDescription: String? { "Keychain could not save the VPN password (\(status))." }
 }
 
+
+/// Serializes potentially blocking Security.framework calls away from UI work.
+enum PasswordStoreWorker {
+    private static let queue = DispatchQueue(label: "com.max.ciscoconnect.keychain", qos: .userInitiated)
+
+    static func read(_ store: PasswordStore) async throws -> String? {
+        try await perform { try store.read() }
+    }
+
+    static func save(_ password: String, to store: PasswordStore) async throws {
+        try await perform { try store.save(password) }
+    }
+
+    private static func perform<T>(_ operation: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try operation() }) }
+        }
+    }
+}

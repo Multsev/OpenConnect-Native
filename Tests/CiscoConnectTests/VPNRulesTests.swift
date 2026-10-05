@@ -457,7 +457,73 @@ final class VPNRulesTests: XCTestCase {
             Set(NSApplication.shared.windows.filter(\.isVisible).map(\.windowNumber)),
             Set(visibleWindows.map(\.windowNumber))
         )
-        visibleWindows.forEach { $0.orderOut(nil) }
+        controller.closePopover()
+        XCTAssertFalse(controller.isShown)
+        controller.showPopover()
+        XCTAssertTrue(controller.isShown)
+        controller.closePopover()
+    }
+
+    @MainActor
+    func testPopoverClosesForEscapeAndOutsideClick() throws {
+        let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
+        controller.showPopover()
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        XCTAssertNil(controller.handleLocalEvent(escape))
+        XCTAssertFalse(controller.isShown)
+        controller.showPopover()
+        let outside = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        XCTAssertNotNil(controller.handleLocalEvent(outside))
+        XCTAssertFalse(controller.isShown)
+    }
+
+    @MainActor
+    func testHostingSizeUpdatesAreDeferredUntilAfterLayout() async throws {
+        var sizes: [CGSize] = []
+        let host = ContentSizedHostingController(rootView: Text("Size").frame(width: 460, height: 100)) { sizes.append($0) }
+        host.view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(sizes.isEmpty)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(sizes.last?.width, 460)
+        XCTAssertEqual(sizes.last?.height, 100)
+    }
+
+    @MainActor
+    func testSlowPasswordReadDoesNotBlockMainActor() async throws {
+        let store = SlowPasswordStore()
+        let read = Task { try await PasswordStoreWorker.read(store) }
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(store.finished)
+        let password = try await read.value
+        XCTAssertEqual(password, "test-secret")
+        XCTAssertFalse(store.ranOnMainThread)
+    }
+
+    @MainActor
+    func testPopoverCanCloseWhileConnectionWaits() async throws {
+        let tunnel = RecordingTunnelClient()
+        tunnel.suspendConnect = true
+        let model = makeCancellationModel(tunnel)
+        let controller = MenuBarPopoverController(model: model)
+        let connect = Task { await model.toggleConnection() }
+        for _ in 0..<100 {
+            if tunnel.connectContinuation != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(tunnel.connectContinuation)
+        controller.showPopover()
+        controller.closePopover()
+        XCTAssertFalse(controller.isShown)
+        XCTAssertTrue(model.status.canDisconnect)
+        let disconnected = await model.disconnect()
+        XCTAssertTrue(disconnected)
+        tunnel.connectContinuation?.resume(returning: .disconnected)
+        await connect.value
+        XCTAssertEqual(model.status.state, .disconnected)
     }
 
     @MainActor
@@ -792,7 +858,7 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertNil(info["receivedBytes"])
     }
 
-    func testSessionJournalPersistsBoundsAndExpiresWithoutSecrets() throws {
+    func testSessionJournalPersistsBoundsAndExpiresWithoutSecrets() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let now = Date()
@@ -803,6 +869,7 @@ final class VPNRulesTests: XCTestCase {
         journal.append(state: .connected, stage: .connected, attempt: attempt, appSession: session, hasError: false, now: now.addingTimeInterval(-2))
         journal.append(state: .disconnecting, stage: nil, attempt: attempt, appSession: session, hasError: false, now: now.addingTimeInterval(-1))
         journal.append(state: .disconnected, stage: nil, attempt: attempt, appSession: session, hasError: false, now: now)
+        await journal.flush()
         let reloaded = VPNSessionJournal(directory: directory, limit: 2)
         XCTAssertTrue(reloaded.storageAvailable)
         XCTAssertEqual(reloaded.events.count, 2)
@@ -810,6 +877,7 @@ final class VPNRulesTests: XCTestCase {
         let attrs = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("sessions.json").path)
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         XCTAssertTrue(reloaded.snapshot(now: now.addingTimeInterval(31 * 86400)).isEmpty)
+        await reloaded.flush()
     }
 
     @MainActor
@@ -921,4 +989,20 @@ private final class RecordingTunnelClient: TunnelClient {
         if authenticationFailure { throw AuthenticationFailure(message: "Rejected") }
         return status
     }
+}
+
+private final class SlowPasswordStore: PasswordStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var mainThread = true
+    var finished: Bool { lock.lock(); defer { lock.unlock() }; return completed }
+    var ranOnMainThread: Bool { lock.lock(); defer { lock.unlock() }; return mainThread }
+    var hasPassword: Bool { true }
+    func read() throws -> String? {
+        Thread.sleep(forTimeInterval: 0.2)
+        lock.lock(); completed = true; mainThread = Thread.isMainThread; lock.unlock()
+        return "test-secret"
+    }
+    func save(_ password: String) throws {}
+    func delete() throws {}
 }

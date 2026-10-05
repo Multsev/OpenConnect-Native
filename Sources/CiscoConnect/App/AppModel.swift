@@ -13,6 +13,7 @@ final class AppModel {
     var networkInfo: VPNNetworkInfo = .empty
     var connectionDetails: VPNConnectionDetails = .empty
     var trafficStats: VPNTrafficStats = .empty
+    private(set) var hasStoredPassword = false
     var errorMessage: String?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
@@ -33,7 +34,8 @@ final class AppModel {
         connectionService: VPNConnectionService,
         helperInstaller: PrivilegedHelperInstaller,
         sessionExpirationNotifier: SessionExpirationNotifying? = nil,
-        statusPollInterval: Duration = .seconds(1)
+        statusPollInterval: Duration = .seconds(1),
+        loadPasswordOnLaunch: Bool = true
     ) {
         self.profileStore = profileStore
         self.passwordStore = passwordStore
@@ -42,7 +44,10 @@ final class AppModel {
         self.sessionExpirationNotifier = sessionExpirationNotifier ?? NoopSessionExpirationNotifier()
         self.statusPollInterval = statusPollInterval
         profile = profileStore.load()
-        password = (try? passwordStore.read()) ?? ""
+        if loadPasswordOnLaunch {
+            password = (try? passwordStore.read()) ?? ""
+            hasStoredPassword = !password.isEmpty
+        }
         status = connectionService.status
         self.sessionExpirationNotifier.cancel()
     }
@@ -61,16 +66,24 @@ final class AppModel {
                 helperInstaller: helperInstaller
             )
         )
-        return AppModel(
+        let model = AppModel(
             profileStore: profileStore,
             passwordStore: passwordStore,
             connectionService: service,
             helperInstaller: helperInstaller,
-            sessionExpirationNotifier: UserNotificationSessionExpirationNotifier()
+            sessionExpirationNotifier: UserNotificationSessionExpirationNotifier(),
+            loadPasswordOnLaunch: false
         )
+        Task { await model.loadSavedPassword() }
+        return model
     }
 
-    var hasStoredPassword: Bool { passwordStore.hasPassword }
+    private func loadSavedPassword() async {
+        let saved = (try? await PasswordStoreWorker.read(passwordStore)) ?? ""
+        hasStoredPassword = !saved.isEmpty
+        // Do not replace edits made while Keychain was responding.
+        if password.isEmpty { password = saved }
+    }
     var isSystemHelperInstalled: Bool { helperInstaller.isInstalled }
 
     func uninstallSystemHelper() async {
@@ -262,7 +275,14 @@ final class AppModel {
                 }
                 self.trafficStats = updated.trafficStats
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
-                    try? self.passwordStore.save(self.pendingPassword)
+                    let passwordToSave = self.pendingPassword
+                    do {
+                        try await PasswordStoreWorker.save(passwordToSave, to: self.passwordStore)
+                        self.hasStoredPassword = true
+                    } catch {
+                        self.errorMessage = error.localizedDescription
+                    }
+                    guard !Task.isCancelled, self.operationID == id else { return }
                     self.pendingPassword = ""
                 }
                 if updated.state == .connected,
