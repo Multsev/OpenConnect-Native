@@ -6,27 +6,37 @@ struct RootView: View {
     @Environment(\.panelIsVisible) private var panelIsVisible
     @Bindable var model: AppModel
     @State private var showsConnectionDetails = false
+    @State private var showsProfileSettings = false
+    @State private var showsAbout = false
     @State private var showsHelperRemovalConfirmation = false
-    @State private var showsPassword = false
     @FocusState private var otpFocused: Bool
 
     var body: some View {
         Group {
             if showsConnectionDetails {
                 ConnectionDetailsView(
-                    networkInfo: model.networkInfo,
-                    connectionDetails: model.connectionDetails,
-                    trafficStats: model.trafficStats,
-                    sessionPolicy: model.status.sessionPolicy,
+                    networkInfo: model.networkInfo, connectionDetails: model.connectionDetails,
+                    trafficStats: model.trafficStats, sessionPolicy: model.status.sessionPolicy,
                     isConnected: model.status.state == .connected,
-                    close: { showsConnectionDetails = false },
-                    progress: model.status.progress,
+                    close: { showsConnectionDetails = false }, progress: model.status.progress,
                     progressIsActive: model.status.canDisconnect && model.status.state != .connected,
                     errorMessage: model.errorMessage
-                )
-                .frame(height: 202)
+                ).frame(height: 202)
+            } else if showsAbout {
+                aboutView
             } else {
-                connectionView
+                VStack(alignment: .leading, spacing: 12) {
+                    if showsProfileSettings || needsConfiguration {
+                        ProfileSettingsView(model: model) {
+                            if model.saveProfileSettings() { showsProfileSettings = false }
+                        }
+                    } else {
+                        header
+                    }
+                    statusView
+                    if model.status.state == .otpRequired { otpView }
+                    actions
+                }
             }
         }
         .tint(OpenConnectPalette.accent)
@@ -34,209 +44,127 @@ struct RootView: View {
         .frame(width: 460, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .alert("Удалить системный компонент?", isPresented: $showsHelperRemovalConfirmation) {
-            Button("Удалить", role: .destructive) {
-                Task { await model.uninstallSystemHelper() }
-            }
+            Button("Удалить", role: .destructive) { Task { await model.uninstallSystemHelper() } }
             Button("Отмена", role: .cancel) {}
         } message: {
             Text("VPN будет отключён. macOS один раз запросит пароль администратора и удалит helper и LaunchDaemon.")
         }
     }
 
-    private var connectionView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: model.status.canDisconnect ? "lock.open.fill" : "lock.fill")
-                    .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(OpenConnectPalette.accent)
-                    .frame(width: 38, height: 38)
-                    .background(OpenConnectPalette.accent.opacity(0.12), in: Circle())
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("OpenConnect Native")
-                        .font(.headline)
-                    Text("Совместимо с Cisco AnyConnect")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+    var needsConfiguration: Bool {
+        !model.isLoadingSavedPassword && !model.hasConfiguredProfile
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable().scaledToFit().frame(width: 28, height: 28)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(URL(string: model.profile.normalized().gateway)?.host ?? "VPN")
+                    .font(.headline).lineLimit(1)
+                Text(model.profile.username.isEmpty ? "OpenConnect Native" : model.profile.username)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
+            Spacer(minLength: 8)
+            settingsMenu
+        }
+    }
 
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
-                inputRow("Шлюз") {
-                    ProfileTextField(text: $model.profile.gateway, placeholder: "vpn.example.com", editable: !profileFieldsLocked)
-                }
-                inputRow("Логин") {
-                    ProfileTextField(text: $model.profile.username, placeholder: "Логин", editable: !profileFieldsLocked)
-                }
-                inputRow("Пароль") {
-                    HStack(spacing: 6) {
-                        ProfileTextField(text: $model.password, placeholder: "Пароль", editable: !profileFieldsLocked, secure: !showsPassword)
-                            .id(showsPassword)
-                        Button {
-                            showsPassword.toggle()
-                        } label: {
-                            Image(systemName: showsPassword ? "eye.slash" : "eye")
-                                .frame(width: 16, height: 16)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(model.password.isEmpty)
-                        .help(showsPassword ? "Скрыть пароль" : "Показать пароль")
-                        .accessibilityLabel(showsPassword ? "Скрыть пароль" : "Показать пароль")
-                    }
-                }
-
-                inputRow("Группа") {
-                    HStack(spacing: 6) {
-                        if !model.availableGroups.isEmpty {
-                            Picker("Группа", selection: Binding(
-                                get: { model.profile.group },
-                                set: { model.selectGroup($0) }
-                            )) {
-                                ForEach(model.availableGroups) { group in
-                                    Text(group.label).tag(group.id)
-                                }
-                            }
-                            .labelsHidden()
-                            .accessibilityLabel("Группа")
-                            .disabled(profileFieldsLocked)
-                        } else {
-                            ProfileTextField(text: $model.profile.group, placeholder: "Группа", editable: !profileFieldsLocked)
-                        }
-
-                        Button {
-                            Task { await model.refreshGroups() }
-                        } label: {
-                            Group {
-                                if model.isDiscoveringGroups {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                }
-                            }
-                            .frame(width: 16, height: 16)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(profileFieldsLocked || model.isDiscoveringGroups)
-                        .help("Обновить группы")
-                        .accessibilityLabel("Обновить группы")
-                    }
-                }
-
-                if model.status.state == .otpRequired {
-                    inputRow("OTP") {
-                        HStack(spacing: 8) {
-                            TextField("Код", text: $model.otp)
-                                .textContentType(.oneTimeCode)
-                                .focused($otpFocused)
-                                .accessibilityIdentifier("otpCode")
-                                .task(id: panelIsVisible) {
-                                    // Wait until the conditional field is mounted before
-                                    // moving the field editor into it. Polling must not
-                                    // repeatedly steal focus from another control.
-                                    await Task.yield()
-                                    guard panelIsVisible, !Task.isCancelled else { return }
-                                    otpFocused = true
-                                }
-                                .onDisappear { otpFocused = false }
-                                .onSubmit(submitOTP)
-                            Button("Отправить", action: submitOTP)
-                                .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
-                    }
-                }
-            }
-            .textFieldStyle(.roundedBorder)
-
+    private var settingsMenu: some View {
+        Menu {
+            Button("Настройки подключения") { showsProfileSettings = true }
+            Button("О приложении") { showsAbout = true }
             Divider()
+            Button("Удалить системный компонент…", role: .destructive) {
+                showsHelperRemovalConfirmation = true
+            }.disabled(!model.isSystemHelperInstalled)
+            Divider()
+            Button("Завершить приложение") { NSApplication.shared.terminate(nil) }
+        } label: { Image(systemName: "gearshape") }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("Настройки").accessibilityLabel("Настройки")
+    }
 
-            HStack(spacing: 8) {
-                Menu {
-                    Button("Сведения") {
-                        showsConnectionDetails = true
-                    }
-                    Divider()
-                    Button("Удалить системный компонент…", role: .destructive) {
-                        showsHelperRemovalConfirmation = true
-                    }
-                    .disabled(!model.isSystemHelperInstalled)
-                    Divider()
-                    Button("Завершить приложение") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Настройки")
-                .accessibilityLabel("Настройки")
-
-                if showsConnectionAnimation {
-                    PingPongConnectionIndicator()
-                        .help("Устанавливается VPN-соединение")
-                } else if panelIsVisible && model.errorMessage == nil && (model.status.isBusy || model.isDiscoveringGroups) {
-                    ProgressView()
-                        .controlSize(.small)
+    private var statusView: some View {
+        VisibleTimeline(interval: 30) { date in
+            HStack(alignment: .top, spacing: 8) {
+                if model.errorMessage == nil && (model.status.state.isBusy || model.isDiscoveringGroups) && model.status.state != .otpRequired && panelIsVisible {
+                    ProgressView().controlSize(.small)
                 } else {
-                    Circle()
-                        .fill(statusIndicatorColor)
-                        .frame(width: 7, height: 7)
+                    Circle().fill(statusIndicatorColor).frame(width: 7, height: 7).padding(.top, 5)
                 }
-                VisibleTimeline(interval: 30) { date in
-                    Button {
-                        showsConnectionDetails = true
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text(statusText(at: date))
-                                .lineLimit(1)
-                            if model.status.state == .connected {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 8, weight: .semibold))
+                Button { showsConnectionDetails = true } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(statusText(at: date)).font(.callout.weight(.medium)).lineLimit(1)
+                        if model.status.state == .connected {
+                            if let remaining = model.status.sessionPolicy.remainingDescription(at: date) {
+                                Text("До завершения: " + remaining).font(.caption)
+                            }
+                            if model.connectionDetails.isAvailable && model.connectionDetails.transport == .tls {
+                                Text("Соединение через TLS").font(.caption)
                             }
                         }
-                        .font(.caption)
-                        .foregroundStyle(statusColor(at: date))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(statusAccessibilityLabel(at: date))
-                    .help(model.status.progress.map { "\($0.stage.title). Нажмите для просмотра этапов" } ?? "Показать сведения о подключении")
+                    }.foregroundStyle(statusColor(at: date))
                 }
-                Spacer(minLength: 8)
-                Button(model.connectionButtonTitle) {
-                    model.connectionButtonPressed()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(connectButtonDisabled)
-
-                Text("v\(appVersion)")
-                    .font(.system(size: 9, weight: .regular, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("Версия приложения \(appVersion)")
+                .buttonStyle(.plain)
+                .accessibilityLabel(statusAccessibilityLabel(at: date))
+                .help("Нажмите для подробностей")
+                Spacer(minLength: 0)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            ApplicationIconWatermark()
-                .padding(.trailing, 2)
-                .offset(y: -3)
+    }
+
+    private var otpView: some View {
+        HStack(spacing: 8) {
+            TextField("Код OTP", text: $model.otp)
+                .textContentType(.oneTimeCode).focused($otpFocused)
+                .accessibilityIdentifier("otpCode")
+                .textFieldStyle(.roundedBorder)
+                .task(id: panelIsVisible) {
+                    await Task.yield()
+                    guard panelIsVisible, !Task.isCancelled else { return }
+                    otpFocused = true
+                }
+                .onDisappear { otpFocused = false }
+                .onSubmit(submitOTP)
+            Button("Отправить", action: submitOTP)
+                .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    private var actions: some View {
+        HStack {
+            if showsProfileSettings || needsConfiguration { settingsMenu }
+            Button("Сведения") { showsConnectionDetails = true }.buttonStyle(.borderless)
+            Spacer()
+            if model.status.state == .connected {
+                connectionButton.buttonStyle(.bordered).tint(.gray)
+            } else {
+                connectionButton.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            }
+        }
     }
 
-    private var connectButtonDisabled: Bool {
-        model.connectionButtonDisabled
+    private var connectionButton: some View {
+        Button(model.connectionButtonTitle) {
+            showsProfileSettings = false
+            model.connectionButtonPressed()
+        }
+        .disabled(model.connectionButtonDisabled || model.isLoadingSavedPassword)
     }
 
-    private var profileFieldsLocked: Bool {
-        model.status.state.locksProfileFields
-    }
-
-    private var showsConnectionAnimation: Bool {
-        model.errorMessage == nil && (model.status.state == .connecting || model.status.state == .authenticating)
+    private var aboutView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("OpenConnect Native").font(.headline)
+                Spacer()
+                Button("Назад") { showsAbout = false }.buttonStyle(.borderless)
+            }
+            Text("Совместимо с Cisco AnyConnect").font(.callout)
+            Text("Версия " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"))
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     func statusText(at date: Date) -> String {
@@ -248,10 +176,7 @@ struct RootView: View {
         case .otpRequired: return "Введите OTP"
         case .connected:
             if model.status.sessionPolicy.hasExpired(at: date) { return "Сеанс завершается…" }
-            var parts = ["Подключено"]
-            if model.connectionDetails.isAvailable { parts.append(model.connectionDetails.transport.rawValue) }
-            if let remaining = model.status.sessionPolicy.remainingDescription(at: date) { parts.append(remaining) }
-            return parts.joined(separator: " · ")
+            return "Подключено"
         case .disconnecting: return "Отключение…"
         case .sessionExpired: return "Сеанс завершён"
         case .failed: return "Ошибка подключения"
@@ -269,6 +194,10 @@ struct RootView: View {
             return .orange
         case .connected where model.connectionDetails.isAvailable && model.connectionDetails.transport == .tls:
             return .orange
+        case .connected:
+            return .green
+        case .otpRequired:
+            return .orange
         default:
             return .secondary
         }
@@ -278,9 +207,13 @@ struct RootView: View {
         if model.errorMessage != nil { return .red }
         switch model.status.state {
         case .connected:
-            return .green
+            let policy = model.status.sessionPolicy
+            return policy.hasExpired(at: Date()) || policy.isExpiringSoon(at: Date()) ||
+                (model.connectionDetails.isAvailable && model.connectionDetails.transport == .tls) ? .orange : .green
         case .sessionExpired, .failed:
             return .red
+        case .otpRequired:
+            return .orange
         default:
             return .secondary.opacity(0.5)
         }
@@ -300,31 +233,5 @@ struct RootView: View {
         }
     }
 
-    private func inputRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        GridRow {
-            Text(title)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(width: 58, alignment: .trailing)
-            content()
-                .frame(maxWidth: .infinity)
-        }
-    }
-
-    private func submitOTP() {
-        Task { await model.submitOTP() }
-    }
-}
-
-private struct ApplicationIconWatermark: View {
-    var body: some View {
-        Image(nsImage: NSApplication.shared.applicationIconImage)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(width: 54, height: 54)
-            .opacity(0.28)
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-    }
+    private func submitOTP() { Task { await model.submitOTP() } }
 }

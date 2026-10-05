@@ -4,6 +4,7 @@ import Foundation
 enum VPNErrorSummary {
     static func text(for message: String) -> String {
         let text = message.lowercased()
+        if text.contains("заполните") { return "Заполните настройки" }
         if text.contains("отключ") && text.contains("подтверд") {
             return "Отключение не подтверждено"
         }

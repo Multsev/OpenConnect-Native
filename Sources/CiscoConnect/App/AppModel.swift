@@ -14,6 +14,7 @@ final class AppModel {
     var connectionDetails: VPNConnectionDetails = .empty
     var trafficStats: VPNTrafficStats = .empty
     private(set) var hasStoredPassword = false
+    private(set) var isLoadingSavedPassword = false
     var errorMessage: String? { didSet { onConnectionStateChange?() } }
     @ObservationIgnored var onConnectionStateChange: (() -> Void)?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
@@ -75,16 +76,37 @@ final class AppModel {
             sessionExpirationNotifier: UserNotificationSessionExpirationNotifier(),
             loadPasswordOnLaunch: false
         )
+        model.isLoadingSavedPassword = true
         Task { await model.loadSavedPassword() }
         return model
     }
 
     private func loadSavedPassword() async {
+        defer { isLoadingSavedPassword = false }
         let saved = (try? await PasswordStoreWorker.read(passwordStore)) ?? ""
         hasStoredPassword = !saved.isEmpty
         // Do not replace edits made while Keychain was responding.
         if password.isEmpty { password = saved }
     }
+    var hasConfiguredProfile: Bool {
+        profile.validationErrors(hasStoredPassword: hasStoredPassword || !password.isEmpty).isEmpty
+    }
+
+    func saveProfileSettings() -> Bool {
+        guard hasConfiguredProfile else {
+            errorMessage = "Заполните шлюз, логин и пароль в настройках подключения"
+            return false
+        }
+        do {
+            try profileStore.save(profile)
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     var isSystemHelperInstalled: Bool { helperInstaller.isInstalled }
 
     func uninstallSystemHelper() async {
