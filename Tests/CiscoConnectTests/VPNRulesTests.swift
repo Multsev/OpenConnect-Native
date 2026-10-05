@@ -444,6 +444,23 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testMenuBarReopenReusesPopoverWithoutMainWindow() async {
+        _ = NSApplication.shared
+        let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
+        controller.showPopover()
+        let visibleWindows = NSApplication.shared.windows.filter(\.isVisible)
+        XCTAssertFalse(visibleWindows.isEmpty)
+        XCTAssertFalse(visibleWindows.contains { $0.title == "OpenConnect Native" })
+
+        controller.showPopover()
+        XCTAssertEqual(
+            Set(NSApplication.shared.windows.filter(\.isVisible).map(\.windowNumber)),
+            Set(visibleWindows.map(\.windowNumber))
+        )
+        visibleWindows.forEach { $0.orderOut(nil) }
+    }
+
+    @MainActor
     func testConnectionLayoutFitsOTPAndLongProfileValues() async throws {
         _ = NSApplication.shared
         let model = makeCancellationModel(RecordingTunnelClient())
@@ -456,7 +473,7 @@ final class VPNRulesTests: XCTestCase {
         var sizes: [TunnelState: CGSize] = [:]
         for state in [TunnelState.disconnected, .connecting, .otpRequired, .connected, .disconnecting, .failed] {
             model.status = TunnelStatus(state: state, message: "Test", attemptID: nil)
-            let host = NSHostingView(rootView: RootView(model: model, menuBarOnly: .constant(true), presentation: .menuBar).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .light))
+            let host = NSHostingView(rootView: RootView(model: model).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .light))
             host.frame = NSRect(x: 0, y: 0, width: 460, height: 1)
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(30))
@@ -495,7 +512,7 @@ final class VPNRulesTests: XCTestCase {
             for hasGroups in [false, true] {
                 let model = makeCancellationModel(RecordingTunnelClient())
                 if hasGroups { model.availableGroups = [VPNGroup(id: "staff", label: "Staff")] }
-                let host = NSHostingView(rootView: RootView(model: model, menuBarOnly: .constant(true), presentation: .menuBar)
+                let host = NSHostingView(rootView: RootView(model: model)
                     .background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, scheme))
                 host.frame = NSRect(x: 0, y: 0, width: 460, height: 300)
                 func fields(_ view: NSView) -> [NSTextField] {
@@ -541,7 +558,7 @@ final class VPNRulesTests: XCTestCase {
         let model = makeCancellationModel(RecordingTunnelClient())
         let popover = NSPopover()
         let controller = ContentSizedHostingController(rootView: RootView(
-            model: model, menuBarOnly: .constant(true), presentation: .menuBar
+            model: model
         ), onSizeChange: { popover.contentSize = $0 })
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -617,7 +634,7 @@ final class VPNRulesTests: XCTestCase {
         model.status.state = .connecting
         model.otp = "246810"
         let controller = NSHostingController(rootView: RootView(
-            model: model, menuBarOnly: .constant(true), presentation: .menuBar
+            model: model
         ))
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

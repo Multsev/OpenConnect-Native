@@ -3,17 +3,8 @@ import SwiftUI
 
 @MainActor
 struct RootView: View {
-    enum Presentation {
-        case window
-        case menuBar
-    }
-
     @Bindable var model: AppModel
-    @Binding var menuBarOnly: Bool
-    let presentation: Presentation
-    @AppStorage(AppPresentationPreferences.menuBarIntroductionKey) private var didShowMenuBarIntroduction = false
     @State private var showsConnectionDetails = false
-    @State private var showsMenuBarIntroduction = false
     @State private var showsHelperRemovalConfirmation = false
     @State private var showsPassword = false
     @FocusState private var otpFocused: Bool
@@ -48,11 +39,6 @@ struct RootView: View {
                 model.errorMessage = nil
             }
         }
-        .alert("Приложение находится в строке меню", isPresented: $showsMenuBarIntroduction) {
-            Button("Понятно", role: .cancel) {}
-        } message: {
-            Text("OpenConnect Native также доступен по цветному значку в верхней строке macOS. Режим можно изменить через шестерёнку → «Только строка меню».")
-        }
         .alert("Удалить системный компонент?", isPresented: $showsHelperRemovalConfirmation) {
             Button("Удалить", role: .destructive) {
                 Task { await model.uninstallSystemHelper() }
@@ -60,15 +46,6 @@ struct RootView: View {
             Button("Отмена", role: .cancel) {}
         } message: {
             Text("VPN будет отключён. macOS один раз запросит пароль администратора и удалит helper и LaunchDaemon.")
-        }
-        .task {
-            guard presentation == .window else { return }
-            if menuBarOnly {
-                AppPresentationPreferences.hideMainWindow()
-            } else if !didShowMenuBarIntroduction {
-                didShowMenuBarIntroduction = true
-                showsMenuBarIntroduction = true
-            }
         }
     }
 
@@ -182,10 +159,6 @@ struct RootView: View {
                     Button("Сведения") {
                         showsConnectionDetails = true
                     }
-                    Toggle("Только строка меню", isOn: Binding(
-                        get: { menuBarOnly },
-                        set: setMenuBarOnly
-                    ))
                     Divider()
                     Button("Удалить системный компонент…", role: .destructive) {
                         showsHelperRemovalConfirmation = true
@@ -342,16 +315,6 @@ struct RootView: View {
 
     private func submitOTP() {
         Task { await model.submitOTP() }
-    }
-
-    private func setMenuBarOnly(_ enabled: Bool) {
-        menuBarOnly = enabled
-        AppPresentationPreferences.applyActivationPolicy(menuBarOnly: enabled)
-        if enabled {
-            AppPresentationPreferences.hideMainWindow()
-        } else {
-            AppPresentationPreferences.showMainWindow()
-        }
     }
 }
 

@@ -66,15 +66,21 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func togglePopover() {
-        guard let button = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            showPopover()
+        }
+    }
+
+    func showPopover() {
+        guard let button = statusItem.button else { return }
+        if !popover.isShown {
             updateStatusItem()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-            button.highlight(true)
         }
+        popover.contentViewController?.view.window?.makeKey()
+        button.highlight(true)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -85,14 +91,9 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
 @MainActor
 private struct MenuBarPopoverContent: View {
     @Bindable var model: AppModel
-    @AppStorage(AppPresentationPreferences.menuBarOnlyKey) private var menuBarOnly = false
 
     var body: some View {
-        RootView(
-            model: model,
-            menuBarOnly: $menuBarOnly,
-            presentation: .menuBar
-        )
+        RootView(model: model)
     }
 }
 

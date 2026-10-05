@@ -43,8 +43,8 @@ else
 fi
 mkdir -p "$(dirname "$app_path")"
 cp -R "$build_root/DerivedData/Build/Products/Release/CiscoConnect.app" "$app_path"
-if [[ $(plutil -extract LSUIElement raw "$app_path/Contents/Info.plist" 2>/dev/null || echo false) == true ]]; then
-  echo "Window mode must remain visible by default." >&2
+if [[ $(plutil -extract LSUIElement raw "$app_path/Contents/Info.plist" 2>/dev/null || echo false) != true ]]; then
+  echo "Menu-bar application must declare LSUIElement=true." >&2
   exit 1
 fi
 ./Tests/HelperCancellationTests.sh
