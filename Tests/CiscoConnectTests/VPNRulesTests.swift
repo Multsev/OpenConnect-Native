@@ -493,7 +493,7 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
-    func testHiddenPopoverReleasesContentAndPreservesModel() {
+    func testHiddenPopoverCachesContentAndPausesActivity() {
         let model = makeCancellationModel(RecordingTunnelClient())
         let controller = MenuBarPopoverController(model: model)
         XCTAssertFalse(controller.hasLoadedContent)
@@ -501,9 +501,14 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertTrue(controller.hasLoadedContent)
         model.otp = "test-otp"
         let profile = model.profile
+        let identity = controller.contentControllerIdentity
+        XCTAssertTrue(controller.isContentActive)
         controller.closePopover()
-        XCTAssertFalse(controller.hasLoadedContent)
+        XCTAssertTrue(controller.hasLoadedContent)
+        XCTAssertFalse(controller.isContentActive)
         controller.showPopover()
+        XCTAssertTrue(controller.isContentActive)
+        XCTAssertEqual(controller.contentControllerIdentity, identity)
         XCTAssertEqual(model.profile, profile)
         XCTAssertEqual(model.otp, "test-otp")
         controller.closePopover()
@@ -539,6 +544,67 @@ final class VPNRulesTests: XCTestCase {
         let reads = tunnel.statusReadCount
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertEqual(tunnel.statusReadCount, reads)
+    }
+
+    @MainActor
+    func testButtonFeedbackIsSynchronousAndRepeatedStopIsIgnored() async throws {
+        let tunnel = RecordingTunnelClient()
+        tunnel.suspendConnect = true
+        let model = makeCancellationModel(tunnel)
+        model.connectionButtonPressed()
+        XCTAssertEqual(model.status.state, .connecting)
+        XCTAssertEqual(model.connectionButtonTitle, "Отменить")
+        for _ in 0..<100 {
+            if tunnel.connectContinuation != nil { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(tunnel.connectContinuation)
+        model.connectionButtonPressed()
+        XCTAssertEqual(model.status.state, .disconnecting)
+        XCTAssertTrue(model.connectionButtonDisabled)
+        model.connectionButtonPressed()
+        let stopped = await waitUntil { model.status.state == .disconnected }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(tunnel.disconnectionCount, 1)
+        tunnel.connectContinuation?.resume(returning: .disconnected)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(model.status.state, .disconnected)
+    }
+
+    @MainActor
+    func testCachedPanelOpenTimings() {
+        _ = NSApplication.shared
+        let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
+        controller.showPopover()
+        controller.closePopover()
+        for _ in 0..<10 {
+            controller.showPopover()
+            controller.closePopover()
+        }
+        let warm = PerformanceMeasurements.shared.snapshot().filter { $0["operation"] as? String == "panelWarmOpen" }
+            .suffix(10).compactMap { $0["milliseconds"] as? Double }.sorted()
+        XCTAssertEqual(warm.count, 10)
+        print("Panel open handler median (10 cached opens): \(warm[warm.count / 2]) ms")
+    }
+
+    func testPerformanceMeasurementsAreBoundedAndHaveNoPayloads() {
+        let measurements = PerformanceMeasurements()
+        for _ in 0..<100 { measurements.record(.buttonFeedback, since: PerformanceMeasurements.start()) }
+        let result = measurements.snapshot()
+        XCTAssertEqual(result.count, 64)
+        XCTAssertEqual(Set(result[0].keys), ["operation", "milliseconds"])
+    }
+
+    func testStageTimingsSeparateOTPWait() throws {
+        let progress = try XCTUnwrap(VPNConnectionProgress(propertyList: [
+            "stage": "tlsTunnel", "stageStartedAt": 1050.0,
+            "events": [["stage": "contacting", "time": 1000.0],
+                       ["stage": "waitingOTP", "time": 1002.0],
+                       ["stage": "checkingOTP", "time": 1048.0],
+                       ["stage": "tlsTunnel", "time": 1050.0]]
+        ]))
+        XCTAssertEqual(progress.completedStageTimings.compactMap { $0["stage"] as? String }, ["contacting", "waitingOTP", "checkingOTP"])
+        XCTAssertEqual(progress.completedStageTimings.compactMap { $0["milliseconds"] as? Double }, [2000, 46000, 2000])
     }
 
     @MainActor

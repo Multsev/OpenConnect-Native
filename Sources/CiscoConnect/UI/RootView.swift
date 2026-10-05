@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 struct RootView: View {
+    @Environment(\.panelIsVisible) private var panelIsVisible
     @Bindable var model: AppModel
     @State private var showsConnectionDetails = false
     @State private var showsHelperRemovalConfirmation = false
@@ -32,8 +33,8 @@ struct RootView: View {
         .frame(width: 460, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .sheet(isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
+            get: { panelIsVisible && model.errorMessage != nil },
+            set: { if !$0 && panelIsVisible { model.errorMessage = nil } }
         )) {
             VPNErrorView(message: model.errorMessage ?? "") {
                 model.errorMessage = nil
@@ -134,12 +135,12 @@ struct RootView: View {
                                 .textContentType(.oneTimeCode)
                                 .focused($otpFocused)
                                 .accessibilityIdentifier("otpCode")
-                                .task {
+                                .task(id: panelIsVisible) {
                                     // Wait until the conditional field is mounted before
                                     // moving the field editor into it. Polling must not
                                     // repeatedly steal focus from another control.
                                     await Task.yield()
-                                    guard !Task.isCancelled else { return }
+                                    guard panelIsVisible, !Task.isCancelled else { return }
                                     otpFocused = true
                                 }
                                 .onDisappear { otpFocused = false }
@@ -180,7 +181,7 @@ struct RootView: View {
                 if showsConnectionAnimation {
                     PingPongConnectionIndicator()
                         .help("Устанавливается VPN-соединение")
-                } else if model.status.isBusy || model.isDiscoveringGroups {
+                } else if panelIsVisible && (model.status.isBusy || model.isDiscoveringGroups) {
                     ProgressView()
                         .controlSize(.small)
                 } else {
@@ -188,12 +189,12 @@ struct RootView: View {
                         .fill(statusIndicatorColor)
                         .frame(width: 7, height: 7)
                 }
-                TimelineView(.periodic(from: .now, by: 30)) { context in
+                VisibleTimeline(interval: 30) { date in
                     Button {
                         showsConnectionDetails = true
                     } label: {
                         HStack(spacing: 3) {
-                            Text(statusText(at: context.date))
+                            Text(statusText(at: date))
                                 .lineLimit(1)
                             if model.status.state == .connected {
                                 Image(systemName: "chevron.right")
@@ -201,15 +202,15 @@ struct RootView: View {
                             }
                         }
                         .font(.caption)
-                        .foregroundStyle(statusColor(at: context.date))
+                        .foregroundStyle(statusColor(at: date))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(statusAccessibilityLabel(at: context.date))
+                    .accessibilityLabel(statusAccessibilityLabel(at: date))
                     .help(model.status.progress.map { "\($0.stage.title). Нажмите для просмотра этапов" } ?? "Показать сведения о подключении")
                 }
                 Spacer(minLength: 8)
                 Button(model.connectionButtonTitle) {
-                    Task { await model.toggleConnection() }
+                    model.connectionButtonPressed()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

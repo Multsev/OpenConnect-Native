@@ -87,7 +87,9 @@ enum PasswordStoreWorker {
     private static let queue = DispatchQueue(label: "com.max.ciscoconnect.keychain", qos: .userInitiated)
 
     static func read(_ store: PasswordStore) async throws -> String? {
-        try await perform { try store.read() }
+        let started = PerformanceMeasurements.start()
+        defer { PerformanceMeasurements.shared.record(.keychainRead, since: started) }
+        return try await perform { try store.read() }
     }
 
     static func save(_ password: String, to store: PasswordStore) async throws {

@@ -84,6 +84,8 @@ final class AutomationController {
                     "scope": "current_app_session"]
         case "logs":
             return ["ok": true, "events": events,
+                    "performance": PerformanceMeasurements.shared.snapshot(),
+                    "completedStageTimings": model.status.progress?.completedStageTimings ?? [],
                     "progress": model.status.progress?.events.map {
                         ["stage": $0.stage.rawValue, "time": ISO8601DateFormatter().string(from: $0.time)]
                     } ?? [], "scope": "current_app_session", "redacted": true]

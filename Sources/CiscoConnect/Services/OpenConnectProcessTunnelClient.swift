@@ -50,18 +50,21 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
             return TunnelStatus(state: .connecting, message: "VPN connection is already starting", attemptID: request.attemptID)
         }
         let currentGeneration = generation
+        let readinessStarted = PerformanceMeasurements.start()
         try await helperInstaller.ensureInstalled(connection: helperConnection)
+        PerformanceMeasurements.shared.record(.helperReady, since: readinessStarted)
         try Task.checkCancellation()
         guard generation == currentGeneration else { throw CancellationError() }
+        let preparationStarted = PerformanceMeasurements.start()
         let paths = try createSession(mode: "connect", gateway: request.gateway, request: request)
-        let payload = try Data(contentsOf: paths.request)
-        try? fileManager.removeItem(at: paths.request)
+        let payload = paths.payload
         sessionStartedAt = Date()
         pidFile = paths.pid
         sessionDirectory = paths.directory
         statusFile = paths.status
         otpFile = paths.otp
         attemptID = request.attemptID
+        PerformanceMeasurements.shared.record(.requestPreparation, since: preparationStarted)
         let start = Task { try await helperConnection.connect(payload: payload) }
         startRequest = start
         do {
@@ -167,9 +170,14 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otp.path)
         var payload: [String: Any] = ["mode": mode, "gateway": gateway.absoluteString, "statusPath": status.path, "otpPath": otp.path, "pidPath": pid.path, "vpncScript": script.path]
         if let request { payload.merge(["username": request.username, "password": request.password, "group": request.group]) { _, new in new } }
-        guard (payload as NSDictionary).write(to: requestFile, atomically: true) else { throw VPNError.helperFailure("Could not prepare the helper request") }
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: requestFile.path)
-        return SessionPaths(directory: directory, helper: helper, request: requestFile, status: status, otp: otp, pid: pid)
+        let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+        // Only group discovery launches a file-based helper. Connection requests
+        // go directly over XPC, avoiding a write/read/delete cycle with credentials.
+        if mode == "discover" {
+            try data.write(to: requestFile, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: requestFile.path)
+        }
+        return SessionPaths(directory: directory, helper: helper, request: requestFile, status: status, otp: otp, pid: pid, payload: data)
     }
 
     private func runtimePaths() throws -> (helper: URL, script: URL) {
@@ -257,7 +265,7 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
 
 }
 
-private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let otp: URL; let pid: URL }
+private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let otp: URL; let pid: URL; let payload: Data }
 private struct HelperSnapshot {
     let state: String
     let message: String

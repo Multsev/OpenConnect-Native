@@ -116,8 +116,8 @@ private struct ConnectionSummaryView: View {
                     CompactDetailRow("Интерфейс", value: interfaceDescription, monospaced: true)
                 }
 
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    if let sessionDescription = sessionDescription(at: context.date) {
+                VisibleTimeline(interval: 30) { date in
+                    if let sessionDescription = sessionDescription(at: date) {
                         CompactDetailRow("Сеанс", value: sessionDescription)
                     }
                 }

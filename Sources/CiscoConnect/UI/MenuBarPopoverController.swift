@@ -6,6 +6,7 @@ import SwiftUI
 /// macOS pointer that tracks the status-bar icon without custom geometry.
 @MainActor
 final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
+    private let activity = PanelActivity()
     private let model: AppModel
     private let statusItem: NSStatusItem
     private let popover: NSPopover
@@ -14,6 +15,8 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private var deactivationObserver: NSObjectProtocol?
 
     var isShown: Bool { popover.isShown }
+    var contentControllerIdentity: ObjectIdentifier? { popover.contentViewController.map(ObjectIdentifier.init) }
+    var isContentActive: Bool { activity.isVisible }
     var hasLoadedContent: Bool { popover.contentViewController != nil }
 
     init(model: AppModel) {
@@ -50,9 +53,9 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private func loadPopoverContent() {
         guard popover.contentViewController == nil else { return }
         let controller = ContentSizedHostingController(
-            rootView: MenuBarPopoverContent(model: model)
+            rootView: MenuBarPopoverContent(model: model, activity: activity)
         ) { [weak self] size in
-            guard let self, self.popover.contentSize != size else { return }
+            guard let self, self.activity.isVisible, self.popover.contentSize != size else { return }
             self.popover.contentSize = size
         }
         popover.contentViewController = controller
@@ -88,6 +91,9 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
 
     func showPopover() {
         guard let button = statusItem.button else { return }
+        let started = PerformanceMeasurements.start()
+        let operation: PerformanceMeasurements.Operation = hasLoadedContent ? .panelWarmOpen : .panelColdOpen
+        activity.isVisible = true
         if !popover.isShown {
             loadPopoverContent()
             updateStatusItem()
@@ -96,11 +102,12 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         popover.contentViewController?.view.window?.makeKey()
         button.highlight(true)
         installCloseHandlers()
+        PerformanceMeasurements.shared.record(operation, since: started)
     }
 
     func closePopover() {
         popover.close()
-        popover.contentViewController = nil
+        activity.isVisible = false
         removeCloseHandlers()
         statusItem.button?.highlight(false)
     }
@@ -146,7 +153,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
-        popover.contentViewController = nil
+        activity.isVisible = false
         removeCloseHandlers()
         statusItem.button?.highlight(false)
     }
@@ -155,9 +162,11 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
 @MainActor
 private struct MenuBarPopoverContent: View {
     @Bindable var model: AppModel
+    @Bindable var activity: PanelActivity
 
     var body: some View {
         RootView(model: model)
+            .environment(\.panelIsVisible, activity.isVisible)
     }
 }
 
