@@ -21,7 +21,8 @@ struct RootView: View {
                     isConnected: model.status.state == .connected,
                     close: { showsConnectionDetails = false },
                     progress: model.status.progress,
-                    progressIsActive: model.status.canDisconnect && model.status.state != .connected
+                    progressIsActive: model.status.canDisconnect && model.status.state != .connected,
+                    errorMessage: model.errorMessage
                 )
                 .frame(height: 202)
             } else {
@@ -32,14 +33,6 @@ struct RootView: View {
         .padding(14)
         .frame(width: 460, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-        .sheet(isPresented: Binding(
-            get: { panelIsVisible && model.errorMessage != nil },
-            set: { if !$0 && panelIsVisible { model.errorMessage = nil } }
-        )) {
-            VPNErrorView(message: model.errorMessage ?? "") {
-                model.errorMessage = nil
-            }
-        }
         .alert("Удалить системный компонент?", isPresented: $showsHelperRemovalConfirmation) {
             Button("Удалить", role: .destructive) {
                 Task { await model.uninstallSystemHelper() }
@@ -181,7 +174,7 @@ struct RootView: View {
                 if showsConnectionAnimation {
                     PingPongConnectionIndicator()
                         .help("Устанавливается VPN-соединение")
-                } else if panelIsVisible && (model.status.isBusy || model.isDiscoveringGroups) {
+                } else if panelIsVisible && model.errorMessage == nil && (model.status.isBusy || model.isDiscoveringGroups) {
                     ProgressView()
                         .controlSize(.small)
                 } else {
@@ -243,10 +236,11 @@ struct RootView: View {
     }
 
     private var showsConnectionAnimation: Bool {
-        model.status.state == .connecting || model.status.state == .authenticating
+        model.errorMessage == nil && (model.status.state == .connecting || model.status.state == .authenticating)
     }
 
-    private func statusText(at date: Date) -> String {
+    func statusText(at date: Date) -> String {
+        if let error = model.errorMessage { return VPNErrorSummary.text(for: error) }
         if model.isDiscoveringGroups { return "Получение групп…" }
         switch model.status.state {
         case .disconnected: return "Отключено"
@@ -264,7 +258,8 @@ struct RootView: View {
         }
     }
 
-    private func statusColor(at date: Date) -> Color {
+    func statusColor(at date: Date) -> Color {
+        if model.errorMessage != nil { return .red }
         switch model.status.state {
         case .sessionExpired, .failed:
             return .red
@@ -280,6 +275,7 @@ struct RootView: View {
     }
 
     private var statusIndicatorColor: Color {
+        if model.errorMessage != nil { return .red }
         switch model.status.state {
         case .connected:
             return .green
@@ -291,6 +287,7 @@ struct RootView: View {
     }
 
     private func statusAccessibilityLabel(at date: Date) -> String {
+        if model.errorMessage != nil { return statusText(at: date) + ". Нажмите для подробностей" }
         switch model.status.state {
         case .connected:
             if model.status.sessionPolicy.hasExpired(at: date) { return "Срок VPN-сеанса истёк, ожидается завершение подключения" }

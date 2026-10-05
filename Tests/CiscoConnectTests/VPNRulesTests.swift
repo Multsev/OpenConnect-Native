@@ -572,6 +572,31 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
+    func testErrorsUseShortRedStatusEvenWhenDisconnectionIsUnconfirmed() {
+        let model = makeCancellationModel(RecordingTunnelClient())
+        let message = "Авторизация не завершена: ошибка обмена со шлюзом (код OpenConnect: -5)\nПоследний этап: Связь со шлюзом."
+        model.errorMessage = message
+        model.status.state = .failed
+        let view = RootView(model: model)
+        XCTAssertEqual(view.statusText(at: Date()), "Ошибка связи со шлюзом")
+        XCTAssertEqual(view.statusColor(at: Date()), .red)
+        model.status.state = .connecting
+        model.errorMessage = "Не удалось подтвердить отключение VPN"
+        XCTAssertEqual(view.statusText(at: Date()), "Отключение не подтверждено")
+        XCTAssertEqual(view.statusColor(at: Date()), .red)
+        XCTAssertFalse(model.connectionButtonDisabled)
+        model.errorMessage = nil
+        model.status.state = .disconnected
+        XCTAssertEqual(view.statusText(at: Date()), "Отключено")
+        XCTAssertNotEqual(view.statusColor(at: Date()), .red)
+    }
+
+    func testUnknownErrorsStayShortAndDoNotInferRejectedCredentials() {
+        XCTAssertEqual(VPNErrorSummary.text(for: String(repeating: "Unknown server error ", count: 100)), "Ошибка подключения")
+        XCTAssertEqual(VPNErrorSummary.text(for: "OpenConnect: -5"), "Ошибка подключения")
+    }
+
+    @MainActor
     func testCachedPanelOpenTimings() {
         _ = NSApplication.shared
         let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
@@ -776,7 +801,7 @@ final class VPNRulesTests: XCTestCase {
     func testLongErrorAndDiagnosticPagesStayWithinTheirViewport() async throws {
         let longText = String(repeating: "Very long diagnostic value without sensitive data. ", count: 500)
         let pages: [(String, AnyView, CGSize)] = [
-            ("error", AnyView(VPNErrorView(message: longText, dismiss: {})), CGSize(width: 432, height: 240)),
+            ("error", AnyView(ConnectionDetailsView(networkInfo: .empty, connectionDetails: .empty, trafficStats: .empty, sessionPolicy: .empty, isConnected: false, close: {}, errorMessage: longText).frame(width: 432, height: 240)), CGSize(width: 432, height: 240)),
             ("network", AnyView(NetworkPolicyDetailsView(networkInfo: VPNNetworkInfo(
                 isAvailable: true,
                 includedRoutes: (0..<200).map { "10.\($0).0.0/16" },

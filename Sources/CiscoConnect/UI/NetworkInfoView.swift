@@ -15,6 +15,7 @@ struct ConnectionDetailsView: View {
     let close: () -> Void
     var progress: VPNConnectionProgress? = nil
     var progressIsActive = false
+    var errorMessage: String? = nil
 
     @State private var page: Page = .summary
 
@@ -62,7 +63,8 @@ struct ConnectionDetailsView: View {
                 showNetwork: { page = .network },
                 showCertificate: { page = .certificate },
                 progress: progress,
-                progressIsActive: progressIsActive
+                progressIsActive: progressIsActive,
+                errorMessage: errorMessage
             )
         case .network:
             NetworkPolicyDetailsView(networkInfo: networkInfo)
@@ -94,10 +96,22 @@ private struct ConnectionSummaryView: View {
     let showCertificate: () -> Void
     var progress: VPNConnectionProgress? = nil
     var progressIsActive = false
+    var errorMessage: String? = nil
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 7) {
+                if let errorMessage {
+                    Label("Ошибка VPN", systemImage: "exclamationmark.triangle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+                }
                 if let progress {
                     ConnectionProgressView(progress: progress, isActive: progressIsActive)
                     Divider()
