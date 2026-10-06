@@ -6,6 +6,23 @@
 
 int main(void) {
     @autoreleasepool {
+        // Verify real macOS socket binding for both transports without authentication.
+        unsigned int loopback = if_nametoindex("lo0");
+        for (int socketType = SOCK_STREAM; socketType <= SOCK_DGRAM; socketType++) {
+            for (int familyIndex = 0; familyIndex < 2; familyIndex++) {
+                int family = familyIndex ? AF_INET6 : AF_INET;
+                int fd = socket(family, socketType, 0);
+                assert(fd >= 0);
+                assert(bindTransportSocket(fd, loopback));
+                unsigned int bound = 0;
+                socklen_t size = sizeof(bound);
+                assert(getsockopt(fd, familyIndex ? IPPROTO_IPV6 : IPPROTO_IP,
+                                  familyIndex ? IPV6_BOUND_IF : IP_BOUND_IF, &bound, &size) == 0);
+                assert(bound == loopback);
+                close(fd);
+            }
+        }
+        assert(!bindTransportSocket(-1, loopback));
         // Reproduce the actual terminating signal with a closed reader, then
         // verify the production signal policy turns it into a handled error.
         for (int protected = 0; protected < 2; protected++) {

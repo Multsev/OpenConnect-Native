@@ -10,6 +10,10 @@
 #import <sys/stat.h>
 #import <unistd.h>
 #import <xpc/xpc.h>
+#import <net/if.h>
+#import <ifaddrs.h>
+#import <netinet/in.h>
+#import <sys/socket.h>
 
 typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect };
 
@@ -72,6 +76,53 @@ static BOOL sendSessionCommand(HelperSession *session, char command) {
 
 static NSString *stringValue(const char *value) {
     return value ? [NSString stringWithUTF8String:value] : @"";
+}
+
+// Select the active physical uplink in macOS service order. Resolve this for
+// every socket so a reconnect follows Wi-Fi/Ethernet changes, including redirects.
+static unsigned int physicalUplinkIndex(void) {
+    NSDictionary *setup = CFBridgingRelease(SCDynamicStoreCopyValue(NULL, CFSTR("Setup:/Network/Global/IPv4")));
+    for (NSString *service in setup[@"ServiceOrder"]) {
+        NSString *key = [NSString stringWithFormat:@"State:/Network/Service/%@/IPv4", service];
+        NSDictionary *state = CFBridgingRelease(SCDynamicStoreCopyValue(NULL, (__bridge CFStringRef)key));
+        NSString *name = state[@"InterfaceName"];
+        if (![name isKindOfClass:NSString.class] || ![name hasPrefix:@"en"] || ![state[@"Router"] length]) continue;
+        unsigned int index = if_nametoindex(name.UTF8String);
+        if (index) return index;
+    }
+    return 0;
+}
+
+static BOOL bindTransportSocket(int fd, unsigned int index) {
+    if (!index) return YES; // No physical uplink: preserve the normal system route.
+    struct sockaddr_storage address;
+    socklen_t length = sizeof(address);
+    if (getsockname(fd, (struct sockaddr *)&address, &length)) return NO;
+    int level = address.ss_family == AF_INET ? IPPROTO_IP : IPPROTO_IPV6;
+    int option = address.ss_family == AF_INET ? IP_BOUND_IF : IPV6_BOUND_IF;
+    if (address.ss_family != AF_INET && address.ss_family != AF_INET6) return NO;
+    if (setsockopt(fd, level, option, &index, sizeof(index))) return NO;
+    // A competing Network Extension can select its virtual source address even
+    // for a host route via Wi-Fi. Bind the matching uplink source as well.
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces)) return NO;
+    BOOL bound = NO;
+    for (struct ifaddrs *item = interfaces; item; item = item->ifa_next) {
+        if (!item->ifa_addr || item->ifa_addr->sa_family != address.ss_family ||
+            if_nametoindex(item->ifa_name) != index) continue;
+        if (bind(fd, item->ifa_addr, item->ifa_addr->sa_len) == 0) { bound = YES; break; }
+    }
+    freeifaddrs(interfaces);
+    return bound;
+}
+
+static void protect_transport_socket(void *data, int fd) {
+    // This affects only OpenConnect transport sockets, never another VPN's routes.
+    if (!bindTransportSocket(fd, physicalUplinkIndex())) {
+        HelperSession *session = (__bridge HelperSession *)data;
+        [session writeState:@"failed" message:@"Не удалось привязать соединение со шлюзом к внешнему интерфейсу" groups:@[]];
+        shutdown(fd, SHUT_RDWR);
+    }
 }
 
 static int process_auth_form(void *data, struct oc_auth_form *form) {
@@ -582,6 +633,7 @@ static int runRequest(NSDictionary *originalRequest) {
     session.vpn = openconnect_vpninfo_new("AnyConnect", validate_peer_certificate, NULL, process_auth_form, progress_callback, (__bridge void *)session);
     if (!session.vpn) { [session writeState:@"failed" message:@"Не удалось создать VPN-контекст" groups:@[]]; result = 71; goto finished; }
     openconnect_set_stats_handler(session.vpn, stats_callback);
+    openconnect_set_protect_socket_handler(session.vpn, protect_transport_socket);
     session.commandFD = openconnect_setup_cmd_pipe(session.vpn);
     if (session.commandFD < 0) { [session writeState:@"failed" message:@"Не удалось создать канал управления VPN" groups:@[]]; result = 79; goto finished; }
     scheduleTimeout(session);
