@@ -33,10 +33,21 @@ struct RootView: View {
                     } else {
                         header
                         statusView
+                        if let message = model.reconnectMessage {
+                            Text(message).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                        }
                         if model.status.state == .otpRequired { otpView }
                         actions
                     }
                 }
+            }
+        }
+        .onChange(of: model.status.state) { _, state in
+            if state == .otpRequired {
+                showsProfileSettings = false
+                showsConnectionDetails = false
+                showsAbout = false
+                otpFocused = true
             }
         }
         .tint(OpenConnectPalette.accent)

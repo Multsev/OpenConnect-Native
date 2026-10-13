@@ -79,6 +79,9 @@ struct ProfileSettingsView: View {
 
             }
             .textFieldStyle(.roundedBorder)
+            Toggle("Автоматическое переподключение", isOn: $model.automaticReconnectEnabled)
+            Text("До 3 попыток за 30 минут. При запросе OTP появится окно ввода; при отказе авторизации повторы остановятся.")
+                .font(.caption).foregroundStyle(.secondary)
             if profileFieldsLocked {
                 Text("Параметры можно изменить после отключения")
                     .font(.caption).foregroundStyle(.secondary)

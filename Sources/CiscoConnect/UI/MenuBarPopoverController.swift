@@ -26,6 +26,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         super.init()
         configureStatusItem()
         configurePopover()
+        model.onOTPRequired = { [weak self] in self?.showPopover() }
         observeTunnelState()
     }
 

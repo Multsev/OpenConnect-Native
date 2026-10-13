@@ -4,6 +4,68 @@ import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testReconnectBudgetSurvivesFlappingAndExpires() {
+        let now = Date(timeIntervalSince1970: 10000)
+        var policy = AutomaticReconnectPolicy()
+        XCTAssertEqual(policy.reserve(now: now)?.delay, 15)
+        policy = AutomaticReconnectPolicy(attempts: policy.attempts)
+        XCTAssertEqual(policy.reserve(now: now)?.delay, 60)
+        XCTAssertEqual(policy.reserve(now: now)?.delay, 180)
+        XCTAssertNil(policy.reserve(now: now))
+        XCTAssertEqual(policy.reserve(now: now.addingTimeInterval(1801))?.number, 1)
+    }
+
+    @MainActor
+    func testAutomaticReconnectAfterExpirationRequestsOTPAndStopsOnRejection() async {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let tunnel = RecordingTunnelClient()
+        let passwords = MemoryPasswordStore(password: "secret")
+        let service = VPNConnectionService(passwordStore: passwords, attemptGuard: RecordingAttemptGuard(), tunnel: tunnel)
+        let model = AppModel(profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")), passwordStore: passwords, connectionService: service, helperInstaller: PrivilegedHelperInstaller(), statusPollInterval: .milliseconds(10), reconnectDefaults: defaults, reconnectDelayScale: 0)
+        model.automaticReconnectEnabled = true
+        var otpWindows = 0
+        model.onOTPRequired = { otpWindows += 1 }
+        await model.toggleConnection()
+        tunnel.status = TunnelStatus(state: .connected, message: "Connected", attemptID: tunnel.attemptID)
+        let connected = await waitUntil { model.status.state == .connected }
+        XCTAssertTrue(connected)
+        tunnel.status = TunnelStatus(state: .sessionExpired, message: "Session expired", attemptID: tunnel.attemptID)
+        let retried = await waitUntil { tunnel.connectionCount == 2 }
+        XCTAssertTrue(retried)
+        XCTAssertEqual(tunnel.disconnectionCount, 1)
+        tunnel.status = TunnelStatus(state: .otpRequired, message: "OTP", attemptID: tunnel.attemptID)
+        let prompted = await waitUntil { otpWindows == 1 }
+        XCTAssertTrue(prompted)
+        XCTAssertTrue(tunnel.submittedOTPs.isEmpty)
+        tunnel.authenticationFailure = true
+        let stopped = await waitUntil { model.reconnectMessage?.contains("остановлено") == true }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(tunnel.connectionCount, 2)
+        XCTAssertTrue(model.reconnectMessage?.contains("Rejected") == true)
+        _ = await model.disconnect()
+    }
+
+    @MainActor
+    func testDisablingReconnectCancelsPendingAttempt() async {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let tunnel = RecordingTunnelClient()
+        let passwords = MemoryPasswordStore(password: "secret")
+        let service = VPNConnectionService(passwordStore: passwords, attemptGuard: RecordingAttemptGuard(), tunnel: tunnel)
+        let model = AppModel(profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")), passwordStore: passwords, connectionService: service, helperInstaller: PrivilegedHelperInstaller(), statusPollInterval: .milliseconds(10), reconnectDefaults: defaults)
+        model.automaticReconnectEnabled = true
+        await model.toggleConnection()
+        tunnel.status = TunnelStatus(state: .connected, message: "Connected", attemptID: tunnel.attemptID)
+        _ = await waitUntil { model.status.state == .connected }
+        tunnel.status = TunnelStatus(state: .sessionExpired, message: "Expired", attemptID: tunnel.attemptID)
+        let scheduled = await waitUntil { model.reconnectMessage != nil }
+        XCTAssertTrue(scheduled)
+        XCTAssertEqual(model.connectionButtonTitle, "Отменить переподключение")
+        model.automaticReconnectEnabled = false
+        XCTAssertNil(model.reconnectMessage)
+        XCTAssertEqual(tunnel.connectionCount, 1)
+        _ = await model.disconnect()
+    }
+
     func testHelperAvailabilityWaiterRecoversFromLaunchRace() async throws {
         let waiter = HelperAvailabilityWaiter(attempts: 3, retryDelay: .zero)
         var pingCount = 0
