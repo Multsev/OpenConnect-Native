@@ -4,6 +4,21 @@ import Observation
 @Observable
 @MainActor
 final class AppModel {
+    var automaticReconnectEnabled: Bool {
+        didSet {
+            reconnectDefaults.set(automaticReconnectEnabled, forKey: "vpn-automatic-reconnect")
+            if !automaticReconnectEnabled { cancelAutomaticReconnect() }
+        }
+    }
+    private(set) var reconnectMessage: String?
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    @ObservationIgnored private var reconnectArmed = false
+    @ObservationIgnored private var automaticAttempt = false
+    @ObservationIgnored private var otpWasRequested = false
+    @ObservationIgnored private var reconnectPolicy: AutomaticReconnectPolicy
+    @ObservationIgnored private let reconnectDelayScale: Double
+    @ObservationIgnored private let reconnectDefaults: UserDefaults
+    @ObservationIgnored var onOTPRequired: (() -> Void)?
     var profile: VPNProfile
     var password = ""
     var otp = ""
@@ -37,8 +52,14 @@ final class AppModel {
         helperInstaller: PrivilegedHelperInstaller,
         sessionExpirationNotifier: SessionExpirationNotifying? = nil,
         statusPollInterval: Duration = .seconds(1),
-        loadPasswordOnLaunch: Bool = true
+        loadPasswordOnLaunch: Bool = true,
+        reconnectDefaults: UserDefaults = .standard,
+        reconnectDelayScale: Double = 1
     ) {
+        self.reconnectDelayScale = reconnectDelayScale
+        self.reconnectDefaults = reconnectDefaults
+        self.automaticReconnectEnabled = reconnectDefaults.bool(forKey: "vpn-automatic-reconnect")
+        self.reconnectPolicy = AutomaticReconnectPolicy(attempts: reconnectDefaults.array(forKey: "vpn-reconnect-attempts") as? [Date] ?? [])
         self.profileStore = profileStore
         self.passwordStore = passwordStore
         self.connectionService = connectionService
@@ -129,6 +150,7 @@ final class AppModel {
     }
 
     var connectionButtonTitle: String {
+        if reconnectTask != nil { return "Отменить переподключение" }
         if status.state == .disconnecting { return "Отключение…" }
         if status.state == .connected { return "Отключиться" }
         return status.canDisconnect || isDiscoveringGroups ? "Отменить" : "Подключиться"
@@ -142,6 +164,7 @@ final class AppModel {
 
     /// Changes visible state in the click handler before scheduling VPN work.
     func connectionButtonPressed() {
+        if reconnectTask != nil { cancelAutomaticReconnect(); return }
         let started = PerformanceMeasurements.start()
         guard status.state != .disconnecting else { return }
         if status.canDisconnect || isDiscoveringGroups {
@@ -154,6 +177,7 @@ final class AppModel {
     }
 
     func toggleConnection() async {
+        if reconnectTask != nil { cancelAutomaticReconnect(); return }
         guard status.state != .disconnecting else { return }
         if status.canDisconnect || isDiscoveringGroups {
             _ = await disconnect()
@@ -162,7 +186,10 @@ final class AppModel {
         }
     }
 
-    private func beginConnection() -> Task<Void, Never> {
+    private func beginConnection(automatic: Bool = false) -> Task<Void, Never> {
+        if !automatic { cancelAutomaticReconnect(); reconnectMessage = nil }
+        automaticAttempt = automatic
+        otpWasRequested = false
         errorMessage = nil
         let id = UUID()
         operationID = id
@@ -179,6 +206,7 @@ final class AppModel {
     /// connection/poll reply must never revive an attempt the user cancelled.
     @discardableResult
     func disconnect() async -> Bool {
+        cancelAutomaticReconnect()
         operationID = UUID()
         connectionTask?.cancel()
         connectionTask = nil
@@ -239,6 +267,7 @@ final class AppModel {
             guard operationID == id else { return }
             errorMessage = error.localizedDescription
             status = connectionService.status
+            handleConnectionEnd(error: error)
         }
     }
 
@@ -306,10 +335,22 @@ final class AppModel {
                     self.status = self.connectionService.status
                     self.errorMessage = error.localizedDescription
                     self.cancelSessionNotifications()
+                    self.handleConnectionEnd(error: error)
                     return
                 }
                 guard !Task.isCancelled, self.operationID == id else { return }
+                let previousState = self.status.state
                 self.status = updated
+                if updated.state == .otpRequired && previousState != .otpRequired {
+                    self.otpWasRequested = true
+                    self.onOTPRequired?()
+                }
+                if updated.state == .connected {
+                    self.reconnectArmed = true
+                    self.automaticAttempt = false
+                    self.otpWasRequested = false
+                    self.reconnectMessage = nil
+                }
                 if updated.networkInfo.isAvailable {
                     self.networkInfo = updated.networkInfo
                 }
@@ -342,15 +383,64 @@ final class AppModel {
                     if updated.message != TunnelStatus.disconnected.message,
                        updated.message != "VPN отключён пользователем" {
                         self.errorMessage = updated.message
+                        self.handleConnectionEnd()
                     }
                     return
                 case .sessionExpired:
+                    self.handleConnectionEnd()
                     return
                 case .disconnecting, .failed:
                     self.cancelSessionNotifications()
+                    if updated.state == .failed { self.handleConnectionEnd() }
                     return
                 }
             }
+        }
+    }
+
+    private func cancelAutomaticReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectArmed = false
+        automaticAttempt = false
+        reconnectMessage = nil
+    }
+
+    private func handleConnectionEnd(error: Error? = nil) {
+        guard automaticReconnectEnabled, reconnectArmed || automaticAttempt, reconnectTask == nil else { return }
+        let reason = error?.localizedDescription ?? status.message
+        let lower = reason.lowercased()
+        let unsafeToRetry = otpWasRequested || error is AuthenticationFailure || status.state == .otpRequired ||
+            status.progress?.stage == .waitingOTP || status.progress?.stage == .checkingOTP ||
+            ["reject", "blocked", "ban", "lock", "credential", "one-time", "otp", "отказ", "блокир"].contains(where: lower.contains)
+        if unsafeToRetry {
+            reconnectArmed = false
+            automaticAttempt = false
+            reconnectMessage = "Автопереподключение остановлено. Попыток за 30 мин: \(reconnectPolicy.attempts.count). Причина: \(reason)"
+            return
+        }
+        guard let attempt = reconnectPolicy.reserve(now: Date()) else {
+            reconnectArmed = false
+            automaticAttempt = false
+            reconnectMessage = "Переподключение не удалось: лимит 3 попытки за 30 минут исчерпан. Причина: \(reason)"
+            return
+        }
+        reconnectDefaults.set(reconnectPolicy.attempts, forKey: "vpn-reconnect-attempts")
+        reconnectMessage = "Переподключение: попытка \(attempt.number) из 3 через \(Int(attempt.delay)) с. Причина: \(reason)"
+        reconnectTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(attempt.delay * (self?.reconnectDelayScale ?? 1))) } catch { return }
+            guard let self, !Task.isCancelled, self.automaticReconnectEnabled else { return }
+            // Confirm the old helper has stopped before creating a fresh auth context.
+            do { try await self.connectionService.disconnect() } catch {
+                self.reconnectTask = nil
+                self.reconnectArmed = false
+                self.reconnectMessage = "Переподключение остановлено: не удалось подтвердить завершение предыдущего сеанса. \(error.localizedDescription)"
+                return
+            }
+            guard !Task.isCancelled, self.automaticReconnectEnabled else { return }
+            self.reconnectTask = nil
+            self.reconnectMessage = "Переподключение: попытка \(attempt.number) из 3"
+            await self.beginConnection(automatic: true).value
         }
     }
 
