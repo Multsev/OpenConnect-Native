@@ -14,6 +14,8 @@
 #import <ifaddrs.h>
 #import <netinet/in.h>
 #import <sys/socket.h>
+#import <arpa/inet.h>
+#import "NetworkRouteMonitor.h"
 
 typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect };
 
@@ -46,6 +48,10 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSString *interfaceName;
 @property BOOL systemConfigurationApplied;
 @property dispatch_source_t statsTimer;
+@property NSTimeInterval lastNetworkAudit;
+@property NSTimeInterval lastNetworkRepair;
+@property NSString *networkWarning;
+- (void)auditNetworkConfiguration;
 - (void)setConnectionStage:(NSString *)stage;
 - (int)processForm:(struct oc_auth_form *)form;
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups;
@@ -173,7 +179,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
 - (void)writeState:(NSString *)state message:(NSString *)message groups:(NSArray *)groups {
     @synchronized (self) {
     NSMutableDictionary *payload = [@{
-        @"state": state, @"message": message, @"groups": groups,
+        @"state": state, @"message": ([state isEqualToString:@"connected"] && self.networkWarning.length) ? self.networkWarning : message, @"groups": groups,
         @"networkInfo": self.networkInfo ?: @{},
         @"connectionDetails": self.connectionDetails ?: @{},
         @"trafficStats": self.trafficStats ?: @{},
@@ -414,6 +420,41 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     return self.systemConfigurationApplied;
 }
 
+- (void)auditNetworkConfiguration {
+    // Serialize with teardown; never touch a retired or reused interface.
+    @synchronized (self) {
+        if (!self.tunnelEstablished || self.sessionFinished || self.disconnectRequested ||
+            !self.interfaceName.length || !if_nametoindex(self.interfaceName.UTF8String)) return;
+        NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+        if (now - self.lastNetworkAudit < 15) return;
+        self.lastNetworkAudit = now;
+        BOOL canRepair = now - self.lastNetworkRepair >= 60;
+        BOOL ready = [self systemConfigurationIsReady];
+        if (!ready && canRepair) {
+            self.lastNetworkRepair = now;
+            ready = [self applyScopedSystemConfiguration] && [self systemConfigurationIsReady];
+        }
+        BOOL conflict = NO;
+        NSDate *auditDeadline = [NSDate dateWithTimeIntervalSinceNow:3];
+        for (NSString *route in self.networkInfo[@"includedRoutes"] ?: @[]) {
+            if (auditDeadline.timeIntervalSinceNow <= 0) break;
+            if (!validCorporateIPv4Route(route)) continue;
+            // Exclusions need longest-prefix reconciliation; never override them.
+            if ([self.networkInfo[@"excludedRoutes"] count]) continue;
+            NSString *address = [route componentsSeparatedByString:@"/"].firstObject;
+            if ([routeInterface(address) isEqualToString:self.interfaceName]) continue;
+            // ADD can restore a missing route, but never replaces another VPN's entry.
+            if (canRepair) {
+                self.lastNetworkRepair = now;
+                runRouteCommand(@[@"-n", @"add", @"-net", route, @"-interface", self.interfaceName]);
+            }
+            if (![routeInterface(address) isEqualToString:self.interfaceName]) conflict = YES;
+        }
+        self.networkWarning = !ready ? @"Корпоративная DNS-конфигурация VPN изменена и не восстановлена"
+            : conflict ? @"Конфликт маршрутов: корпоративный трафик направлен вне VPN. Проверьте исключения другого VPN." : nil;
+    }
+}
+
 - (void)removeScopedSystemConfiguration {
     if (!self.interfaceName.length) return;
     SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("OpenConnect Native"), NULL, NULL);
@@ -607,6 +648,7 @@ static void startStatsTimer(HelperSession *session) {
     __weak HelperSession *weakSession = session;
     dispatch_source_set_event_handler(session.statsTimer, ^{
         HelperSession *strongSession = weakSession;
+        [strongSession auditNetworkConfiguration];
         sendSessionCommand(strongSession, OC_CMD_STATS);
     });
     dispatch_resume(session.statsTimer);

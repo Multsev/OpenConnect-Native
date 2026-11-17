@@ -6,6 +6,14 @@
 
 int main(void) {
     @autoreleasepool {
+        assert(validCorporateIPv4Route(@"10.0.0.0/8"));
+        assert(validCorporateIPv4Route(@"10.0.0.1/32"));
+        assert(!validCorporateIPv4Route(@"0.0.0.0/0"));
+        assert(!validCorporateIPv4Route(@"10.0.0.0/33"));
+        assert(!validCorporateIPv4Route(@"10.0.0.0/8;id"));
+        assert(!validCorporateIPv4Route(@"::/0"));
+        assert([routeInterface(@"127.0.0.1") isEqualToString:@"lo0"]);
+
         // Verify real macOS socket binding for both transports without authentication.
         unsigned int loopback = if_nametoindex("lo0");
         for (int socketType = SOCK_STREAM; socketType <= SOCK_DGRAM; socketType++) {
