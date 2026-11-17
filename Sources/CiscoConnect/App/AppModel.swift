@@ -24,7 +24,34 @@ final class AppModel {
     var otp = ""
     var availableGroups: [VPNGroup] = []
     var isDiscoveringGroups = false
-    var status: TunnelStatus = .disconnected { didSet { onConnectionStateChange?() } }
+    var status: TunnelStatus = .disconnected { didSet {
+        onConnectionStateChange?()
+        if oldValue.state != status.state { updateHealthMonitor() }
+    } }
+    var healthWarning: String?
+    @ObservationIgnored private var healthTask: Task<Void, Never>?
+
+    private func updateHealthMonitor() {
+        healthTask?.cancel()
+        healthWarning = nil
+        guard status.state == .connected,
+              let raw = UserDefaults.standard.string(forKey: "vpn-health-check-url"),
+              let url = URL(string: raw), url.scheme == "https", url.host != nil,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return }
+        healthTask = Task { [weak self] in
+            var health = VPNHealthPolicy()
+            while !Task.isCancelled {
+                let reachable = await VPNHealthProbe.check(url)
+                guard !Task.isCancelled, let self, self.status.state == .connected else { return }
+                health.record(reachable: reachable)
+                self.healthWarning = health.isUnavailable
+                    ? "Туннель установлен, но контрольный HTTPS-сервис недоступен. Проверьте корпоративную сеть или переподключите VPN. Это не ошибка пароля."
+                    : nil
+                self.onConnectionStateChange?()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
     var networkInfo: VPNNetworkInfo = .empty
     var connectionDetails: VPNConnectionDetails = .empty
     var trafficStats: VPNTrafficStats = .empty

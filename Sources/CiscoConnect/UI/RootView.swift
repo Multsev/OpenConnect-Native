@@ -20,7 +20,7 @@ struct RootView: View {
                     isConnected: model.status.state == .connected,
                     close: { showsConnectionDetails = false }, progress: model.status.progress,
                     progressIsActive: model.status.canDisconnect && model.status.state != .connected,
-                    errorMessage: model.errorMessage
+                    errorMessage: model.errorMessage ?? model.healthWarning
                 ).frame(height: 202)
             } else if showsAbout {
                 aboutView
@@ -114,6 +114,9 @@ struct RootView: View {
                 Button { showsConnectionDetails = true } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(statusText(at: date)).font(.callout.weight(.medium)).lineLimit(1)
+                        if let warning = model.healthWarning {
+                            Text(warning).font(.caption).foregroundStyle(.red)
+                        }
                         if model.status.state == .connected {
                             if let remaining = model.status.sessionPolicy.remainingDescription(at: date) {
                                 Text("До завершения: " + remaining).font(.caption)
@@ -185,6 +188,7 @@ struct RootView: View {
 
     func statusText(at date: Date) -> String {
         if let error = model.errorMessage { return VPNErrorSummary.text(for: error) }
+        if model.healthWarning != nil { return "Нет доступа к контрольному сервису" }
         if model.isDiscoveringGroups { return "Получение групп…" }
         switch model.status.state {
         case .disconnected: return "Отключено"
@@ -200,7 +204,7 @@ struct RootView: View {
     }
 
     func statusColor(at date: Date) -> Color {
-        if model.errorMessage != nil { return .red }
+        if model.errorMessage != nil || model.healthWarning != nil { return .red }
         switch model.status.state {
         case .sessionExpired, .failed:
             return .red
@@ -220,7 +224,7 @@ struct RootView: View {
     }
 
     private var statusIndicatorColor: Color {
-        if model.errorMessage != nil { return .red }
+        if model.errorMessage != nil || model.healthWarning != nil { return .red }
         switch model.status.state {
         case .connected:
             let policy = model.status.sessionPolicy

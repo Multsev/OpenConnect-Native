@@ -64,7 +64,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     private func updateStatusItem() {
-        let displayState: TunnelState = model.errorMessage == nil ? model.status.state : .failed
+        let displayState: TunnelState = model.errorMessage == nil && model.healthWarning == nil ? model.status.state : .failed
         let appearance = MenuBarIconAppearance(tunnelState: displayState)
         statusItem.button?.image = MenuBarStatusIcon.image(for: displayState)
         statusItem.button?.imagePosition = .imageOnly
@@ -76,6 +76,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         withObservationTracking {
             _ = model.status.state
             _ = model.errorMessage
+            _ = model.healthWarning
         } onChange: { [weak self] in
             DispatchQueue.main.async { @MainActor [weak self] in
                 self?.updateStatusItem()
