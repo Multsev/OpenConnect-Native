@@ -78,6 +78,7 @@ final class AutomationController {
                     "otpValiditySeconds": NSNull(),
                     "otpSubmitted": challengeID != nil && submittedChallenge == challengeID,
                     "hasError": model.errorMessage != nil,
+                    "healthWarning": model.healthWarning ?? "",
                     "helperInstalled": model.isSystemHelperInstalled,
                     "hasStoredPassword": model.hasStoredPassword,
                     "operationPending": connecting || stopping || submittingOTP,
