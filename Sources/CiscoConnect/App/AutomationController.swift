@@ -79,6 +79,7 @@ final class AutomationController {
                     "otpSubmitted": challengeID != nil && submittedChallenge == challengeID,
                     "hasError": model.errorMessage != nil,
                     "healthWarning": model.healthWarning ?? "",
+                    "networkWarning": model.networkWarning ?? "",
                     "helperInstalled": model.isSystemHelperInstalled,
                     "hasStoredPassword": model.hasStoredPassword,
                     "operationPending": connecting || stopping || submittingOTP,

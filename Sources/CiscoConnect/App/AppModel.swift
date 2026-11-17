@@ -28,6 +28,7 @@ final class AppModel {
         onConnectionStateChange?()
         if oldValue.state != status.state { updateHealthMonitor() }
     } }
+    var networkWarning: String?
     var healthWarning: String?
     @ObservationIgnored private var healthTask: Task<Void, Never>?
 
@@ -368,6 +369,7 @@ final class AppModel {
                 guard !Task.isCancelled, self.operationID == id else { return }
                 let previousState = self.status.state
                 self.status = updated
+                self.networkWarning = updated.state == .connected && (updated.message.hasPrefix("Конфликт маршрутов:") || updated.message.hasPrefix("Корпоративная DNS-конфигурация")) ? updated.message : nil
                 if updated.state == .otpRequired && previousState != .otpRequired {
                     self.otpWasRequested = true
                     self.onOTPRequired?()
