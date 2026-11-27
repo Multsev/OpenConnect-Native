@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   test:
+    name: ${{ github.event_name == 'pull_request' && 'test' || 'push scan and tests' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +31,7 @@ jobs:
         run: ./Tests/ReleasePipelineTests.sh
 
   dmg:
+    name: ${{ github.event_name == 'pull_request' && 'dmg' || 'release image' }}
     if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: macos-15
