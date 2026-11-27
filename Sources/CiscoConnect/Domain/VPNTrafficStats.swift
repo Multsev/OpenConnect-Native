@@ -46,7 +46,7 @@ struct TrafficRate: Equatable, Identifiable {
 
 struct TrafficHistory {
     private var previous: (stats: VPNTrafficStats, time: TimeInterval)?
-    private(set) var samples: [TrafficRate] = []
+    private(set) var latest: TrafficRate?
 
     mutating func record(_ stats: VPNTrafficStats, at time: TimeInterval) {
         guard stats.isAvailable else {
@@ -59,12 +59,11 @@ struct TrafficHistory {
         guard elapsed > 0, elapsed < 5,
               stats.receivedBytes >= previous.stats.receivedBytes,
               stats.transmittedBytes >= previous.stats.transmittedBytes else {
-            samples.removeAll()
+            latest = nil
             return
         }
-        samples.removeAll { time - $0.id >= 30 }
-        samples.append(TrafficRate(id: time,
+        latest = TrafficRate(id: time,
             received: Double(stats.receivedBytes - previous.stats.receivedBytes) / elapsed,
-            transmitted: Double(stats.transmittedBytes - previous.stats.transmittedBytes) / elapsed))
+            transmitted: Double(stats.transmittedBytes - previous.stats.transmittedBytes) / elapsed)
     }
 }

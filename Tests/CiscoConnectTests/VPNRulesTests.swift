@@ -4,22 +4,36 @@ import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testRoadFillsAndSlowsAsThroughputIncreases() {
+        let empty = TrafficLane(bytesPerSecond: 0)
+        let light = TrafficLane(bytesPerSecond: 128)
+        let busy = TrafficLane(bytesPerSecond: 262144)
+        let jam = TrafficLane(bytesPerSecond: 16777216)
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertEqual(light.count, 1)
+        XCTAssertGreaterThan(busy.count, light.count)
+        XCTAssertEqual(jam.count, 16)
+        XCTAssertGreaterThan(light.speed, busy.speed)
+        XCTAssertGreaterThan(busy.speed, jam.speed)
+        XCTAssertGreaterThan(jam.speed, 0)
+    }
+
     func testTrafficHistoryUsesElapsedTimeAndResetsOnMissingOrDecreasingCounters() {
         func counters(_ rx: Int, _ tx: Int) -> VPNTrafficStats {
             VPNTrafficStats(propertyList: ["receivedBytes": rx, "transmittedBytes": tx])
         }
         var history = TrafficHistory()
         history.record(counters(200, 20), at: 1)
-        XCTAssertTrue(history.samples.isEmpty)
+        XCTAssertNil(history.latest)
         history.record(counters(1400, 320), at: 3)
-        XCTAssertEqual(history.samples.last, TrafficRate(id: 3, received: 600, transmitted: 150))
+        XCTAssertEqual(history.latest, TrafficRate(id: 3, received: 600, transmitted: 150))
         history.record(counters(1400, 320), at: 4)
-        XCTAssertEqual(history.samples.last, TrafficRate(id: 4, received: 0, transmitted: 0))
+        XCTAssertEqual(history.latest, TrafficRate(id: 4, received: 0, transmitted: 0))
         history.record(counters(10, 0), at: 5)
-        XCTAssertTrue(history.samples.isEmpty)
+        XCTAssertNil(history.latest)
         history.record(.empty, at: 6)
         history.record(counters(2000, 2000), at: 7)
-        XCTAssertTrue(history.samples.isEmpty)
+        XCTAssertNil(history.latest)
     }
 
     func testReconnectBudgetSurvivesFlappingAndExpires() {
