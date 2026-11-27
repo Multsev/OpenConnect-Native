@@ -37,6 +37,7 @@ final class VPNRulesTests: XCTestCase {
     func testAutomaticReconnectAfterExpirationRequestsOTPAndStopsOnRejection() async {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let tunnel = RecordingTunnelClient()
+        tunnel.initialConnectionStatus = tunnel.status
         let passwords = MemoryPasswordStore(password: "secret")
         let service = VPNConnectionService(passwordStore: passwords, attemptGuard: RecordingAttemptGuard(), tunnel: tunnel)
         let model = AppModel(profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")), passwordStore: passwords, connectionService: service, helperInstaller: PrivilegedHelperInstaller(), statusPollInterval: .milliseconds(10), reconnectDefaults: defaults, reconnectDelayScale: 0)
@@ -1235,6 +1236,7 @@ private final class RecordingSessionExpirationNotifier: SessionExpirationNotifyi
 @MainActor
 private final class RecordingTunnelClient: TunnelClient {
     var status = TunnelStatus(state: .authenticating, message: "Authenticating", attemptID: nil)
+    var initialConnectionStatus: TunnelStatus?
     var discoveredGroups = [VPNGroup(id: "staff", label: "Staff")]
     var discoveryCount = 0
     var connectionCount = 0
@@ -1258,6 +1260,7 @@ private final class RecordingTunnelClient: TunnelClient {
     }
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus {
         connectionCount += 1
+        if let initialConnectionStatus { status = initialConnectionStatus }
         attemptID = request.attemptID
         status.attemptID = request.attemptID
         if suspendConnect { return try await withCheckedThrowingContinuation { connectContinuation = $0 } }
