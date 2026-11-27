@@ -152,6 +152,7 @@ struct RootView: View {
                 .onDisappear { otpFocused = false }
                 .onSubmit(submitOTP)
             Button("Отправить", action: submitOTP)
+                .controlSize(.small)
                 .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }

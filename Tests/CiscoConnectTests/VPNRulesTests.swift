@@ -539,18 +539,24 @@ final class VPNRulesTests: XCTestCase {
         )
         controller.closePopover()
         XCTAssertFalse(controller.isShown)
+        try? await Task.sleep(for: .milliseconds(100))
         controller.showPopover()
+        try? await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(controller.isShown)
         controller.closePopover()
     }
 
     @MainActor
-    func testStatusButtonActionTogglesPanelTwice() throws {
+    func testStatusButtonActionTogglesPanelTwice() async throws {
         let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
         let button = try XCTUnwrap(controller.statusButton)
+        try await Task.sleep(for: .milliseconds(150))
         button.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
         XCTAssertTrue(controller.isShown)
+        try await Task.sleep(for: .milliseconds(150))
         button.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
         XCTAssertFalse(controller.isShown)
     }
 
