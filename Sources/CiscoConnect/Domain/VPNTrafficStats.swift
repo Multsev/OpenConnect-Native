@@ -6,10 +6,13 @@ struct VPNTrafficStats: Equatable, Sendable {
     var receivedPackets: UInt64 = 0
     var transmittedPackets: UInt64 = 0
 
+    private(set) var isAvailable = false
+
     static let empty = VPNTrafficStats()
 
     init(propertyList: [String: Any]? = nil) {
         guard let propertyList else { return }
+        isAvailable = propertyList["receivedBytes"] is NSNumber && propertyList["transmittedBytes"] is NSNumber
         receivedBytes = Self.unsigned(propertyList["receivedBytes"])
         transmittedBytes = Self.unsigned(propertyList["transmittedBytes"])
         receivedPackets = Self.unsigned(propertyList["receivedPackets"])
@@ -32,5 +35,36 @@ struct VPNTrafficStats: Equatable, Sendable {
 
     private static func unsigned(_ value: Any?) -> UInt64 {
         (value as? NSNumber)?.uint64Value ?? 0
+    }
+}
+
+struct TrafficRate: Equatable, Identifiable {
+    let id: TimeInterval
+    let received: Double
+    let transmitted: Double
+}
+
+struct TrafficHistory {
+    private var previous: (stats: VPNTrafficStats, time: TimeInterval)?
+    private(set) var samples: [TrafficRate] = []
+
+    mutating func record(_ stats: VPNTrafficStats, at time: TimeInterval) {
+        guard stats.isAvailable else {
+            self = TrafficHistory()
+            return
+        }
+        defer { previous = (stats, time) }
+        guard let previous else { return }
+        let elapsed = time - previous.time
+        guard elapsed > 0, elapsed < 5,
+              stats.receivedBytes >= previous.stats.receivedBytes,
+              stats.transmittedBytes >= previous.stats.transmittedBytes else {
+            samples.removeAll()
+            return
+        }
+        samples.removeAll { time - $0.id >= 30 }
+        samples.append(TrafficRate(id: time,
+            received: Double(stats.receivedBytes - previous.stats.receivedBytes) / elapsed,
+            transmitted: Double(stats.transmittedBytes - previous.stats.transmittedBytes) / elapsed))
     }
 }

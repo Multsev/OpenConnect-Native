@@ -33,6 +33,9 @@ struct RootView: View {
                     } else {
                         header
                         statusView
+                        if model.status.state == .connected {
+                            TrafficHistoryView(history: model.trafficHistory)
+                        }
                         if let message = model.reconnectMessage {
                             Text(message).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
                         }
@@ -149,6 +152,7 @@ struct RootView: View {
                 .onDisappear { otpFocused = false }
                 .onSubmit(submitOTP)
             Button("Отправить", action: submitOTP)
+                .controlSize(.small)
                 .disabled(model.otp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }

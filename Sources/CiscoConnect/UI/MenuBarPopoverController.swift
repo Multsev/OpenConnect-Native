@@ -14,6 +14,11 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private var globalEventMonitor: Any?
     private var deactivationObserver: NSObjectProtocol?
 
+    private var animationTimer: Timer?
+    private var frame = 0
+    private var displayedAppearance: MenuBarIconAppearance?
+
+    var statusButton: NSStatusBarButton? { statusItem.button }
     var isShown: Bool { popover.isShown }
     var contentControllerIdentity: ObjectIdentifier? { popover.contentViewController.map(ObjectIdentifier.init) }
     var isContentActive: Bool { activity.isVisible }
@@ -31,6 +36,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     }
 
     deinit {
+        animationTimer?.invalidate()
         if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
         if let globalEventMonitor { NSEvent.removeMonitor(globalEventMonitor) }
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
@@ -41,7 +47,7 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(togglePopover)
-        button.sendAction(on: [.leftMouseUp])
+        button.sendAction(on: [.leftMouseDown])
         updateStatusItem()
     }
 
@@ -66,7 +72,23 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
     private func updateStatusItem() {
         let displayState: TunnelState = model.errorMessage == nil && model.healthWarning == nil && model.networkWarning == nil ? model.status.state : .failed
         let appearance = MenuBarIconAppearance(tunnelState: displayState)
+        guard displayedAppearance != appearance else { return }
+        displayedAppearance = appearance
+        animationTimer?.invalidate()
+        animationTimer = nil
+        frame = 0
         statusItem.button?.image = MenuBarStatusIcon.image(for: displayState)
+        if appearance == .working || appearance == .online {
+            animationTimer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let next = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : (self.frame + 1) % 32
+                    guard next != self.frame else { return }
+                    self.frame = next
+                    self.statusItem.button?.image = MenuBarStatusIcon.image(for: displayState, phase: Double(next) * .pi / 16)
+                }
+            }
+        }
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.toolTip = appearance.accessibilityLabel
         statusItem.button?.setAccessibilityLabel(appearance.accessibilityLabel)
@@ -101,7 +123,6 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         activity.isVisible = true
         if !popover.isShown {
             loadPopoverContent()
-            updateStatusItem()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
         popover.contentViewController?.view.window?.makeKey()
@@ -124,7 +145,8 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
             return self.handleLocalEvent(event)
         }
         globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.closePopover()
+            guard let self, !self.containsStatusButton(NSEvent.mouseLocation) else { return }
+            self.closePopover()
         }
         deactivationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
@@ -137,10 +159,16 @@ final class MenuBarPopoverController: NSObject, NSPopoverDelegate {
         if event.type == .keyDown {
             if event.keyCode == 53 { closePopover(); return nil }
         } else if event.window !== statusItem.button?.window,
+                  !containsStatusButton(event.window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow),
                   !containsPopoverWindow(event.window) {
             closePopover()
         }
         return event
+    }
+
+    private func containsStatusButton(_ screenPoint: CGPoint) -> Bool {
+        guard let button = statusItem.button, let window = button.window else { return false }
+        return window.convertToScreen(button.convert(button.bounds, to: nil)).contains(screenPoint)
     }
 
     private func containsPopoverWindow(_ window: NSWindow?) -> Bool {
