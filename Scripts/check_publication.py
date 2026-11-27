@@ -32,6 +32,8 @@ def findings(data, path, private_terms=(), binary=False):
         return issues
     for match in EMAIL.finditer(data.lower()):
         domain = match.group(1)
+        if match.group() == b"git@" + b"github.com" and data[match.end():match.end()+1] in (b":", b"/"):
+            continue
         if match.group() == b"noreply@github.com":
             continue
         if domain not in (b"users.noreply.github.com", b"2x.png") and not domain.endswith((b".test", b".invalid", b".example")):
