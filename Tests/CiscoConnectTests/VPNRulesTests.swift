@@ -989,15 +989,16 @@ final class VPNRulesTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         defer { window.close() }
         for _ in 0..<2 {
+            controller.view.layoutSubtreeIfNeeded()
             model.status.state = .otpRequired
             let focused = await waitUntil {
                 controller.view.layoutSubtreeIfNeeded()
-                guard let editor = window.firstResponder as? NSTextView,
-                      let field = editor.delegate as? NSTextField else { return false }
-                return field.placeholderString == "Код OTP" && editor.string == "246810"
+                guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return false }
+                return editor.string == model.otp
             }
             XCTAssertTrue(focused, "New OTP field should own the keyboard field editor")
             model.status.state = .authenticating
