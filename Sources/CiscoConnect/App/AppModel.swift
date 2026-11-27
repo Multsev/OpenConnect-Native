@@ -26,7 +26,10 @@ final class AppModel {
     var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected { didSet {
         onConnectionStateChange?()
-        if oldValue.state != status.state { updateHealthMonitor() }
+        if oldValue.state != status.state {
+            trafficHistory = TrafficHistory()
+            updateHealthMonitor()
+        }
     } }
     var networkWarning: String?
     var healthWarning: String?
@@ -55,6 +58,7 @@ final class AppModel {
     }
     var networkInfo: VPNNetworkInfo = .empty
     var connectionDetails: VPNConnectionDetails = .empty
+    private(set) var trafficHistory = TrafficHistory()
     var trafficStats: VPNTrafficStats = .empty
     private(set) var hasStoredPassword = false
     private(set) var isLoadingSavedPassword = false
@@ -387,6 +391,9 @@ final class AppModel {
                     self.connectionDetails = updated.connectionDetails
                 }
                 self.trafficStats = updated.trafficStats
+                if updated.state == .connected {
+                    self.trafficHistory.record(updated.trafficStats, at: ProcessInfo.processInfo.systemUptime)
+                }
                 if updated.state == .connected, !self.pendingPassword.isEmpty {
                     let passwordToSave = self.pendingPassword
                     do {

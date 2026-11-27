@@ -55,45 +55,41 @@ private func drawIcon(in context: CGContext, pixelSize: Int) {
     context.setLineWidth(8)
     context.strokePath()
 
-    // The broken arch reads as both a secure tunnel and an open connection.
-    let arch = CGMutablePath()
-    arch.move(to: CGPoint(x: 282, y: 316))
-    arch.addLine(to: CGPoint(x: 282, y: 526))
-    arch.addCurve(
-        to: CGPoint(x: 742, y: 590),
-        control1: CGPoint(x: 282, y: 836),
-        control2: CGPoint(x: 742, y: 836)
-    )
-    context.addPath(arch)
-    context.setStrokeColor(color(0x31D667).cgColor)
-    context.setLineWidth(112)
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
-    context.strokePath()
+    let globe = CGRect(x: 185, y: 230, width: 610, height: 610)
+    let ocean = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [color(0x55E1DF).cgColor, color(0x176C9F).cgColor, color(0x103451).cgColor] as CFArray,
+        locations: [0, 0.58, 1])!
+    context.saveGState()
+    context.addEllipse(in: globe)
+    context.clip()
+    context.drawLinearGradient(ocean, start: CGPoint(x: 280, y: 800),
+                               end: CGPoint(x: 710, y: 240), options: [.drawsAfterEndLocation, .drawsBeforeStartLocation])
+    context.setStrokeColor(color(0xC2FFEF, alpha: 0.8).cgColor)
+    context.setLineWidth(20)
+    context.strokeEllipse(in: globe.insetBy(dx: 140, dy: 0))
+    context.strokeEllipse(in: globe.insetBy(dx: -45, dy: 205))
+    context.restoreGState()
+    context.setStrokeColor(color(0xB3F9ED).cgColor)
+    context.setLineWidth(18)
+    context.strokeEllipse(in: globe)
 
-    let lowerRight = CGMutablePath()
-    lowerRight.move(to: CGPoint(x: 742, y: 374))
-    lowerRight.addLine(to: CGPoint(x: 742, y: 316))
-    context.addPath(lowerRight)
-    context.setStrokeColor(color(0x31D667).cgColor)
-    context.setLineWidth(112)
-    context.setLineCap(.round)
-    context.strokePath()
-
-    // A bright route enters the tunnel; the dot stays legible at menu-bar sizes.
-    let route = CGMutablePath()
-    route.move(to: CGPoint(x: 512, y: 240))
-    route.addLine(to: CGPoint(x: 512, y: 590))
-    context.addPath(route)
-    context.setStrokeColor(color(0xE9FEFF).cgColor)
-    context.setLineWidth(64)
-    context.setLineCap(.round)
-    context.strokePath()
-
-    context.setFillColor(color(0x46D8F1).cgColor)
-    context.fillEllipse(in: CGRect(x: 467, y: 544, width: 90, height: 90))
-    context.setFillColor(color(0xF5FFFF).cgColor)
-    context.fillEllipse(in: CGRect(x: 490, y: 567, width: 44, height: 44))
+    let shackle = CGRect(x: 615, y: 282, width: 160, height: 217)
+    context.setStrokeColor(color(0x0A2336).cgColor)
+    context.setLineWidth(68)
+    context.strokeEllipse(in: shackle)
+    context.setStrokeColor(color(0xE6FFF6).cgColor)
+    context.setLineWidth(36)
+    context.strokeEllipse(in: shackle)
+    let lock = CGPath(roundedRect: CGRect(x: 552, y: 166, width: 286, height: 215),
+                      cornerWidth: 40, cornerHeight: 40, transform: nil)
+    context.addPath(lock)
+    context.setFillColor(color(0xFBCE69).cgColor)
+    context.setStrokeColor(color(0x0A2336).cgColor)
+    context.setLineWidth(18)
+    context.drawPath(using: .fillStroke)
+    context.setFillColor(color(0x403627).cgColor)
+    context.fillEllipse(in: CGRect(x: 670, y: 258, width: 50, height: 50))
+    context.fill(CGRect(x: 685, y: 228, width: 20, height: 44))
 }
 
 private func pngData(pixelSize: Int) throws -> Data {

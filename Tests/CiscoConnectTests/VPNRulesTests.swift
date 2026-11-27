@@ -4,6 +4,24 @@ import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testTrafficHistoryUsesElapsedTimeAndResetsOnMissingOrDecreasingCounters() {
+        func counters(_ rx: Int, _ tx: Int) -> VPNTrafficStats {
+            VPNTrafficStats(propertyList: ["receivedBytes": rx, "transmittedBytes": tx])
+        }
+        var history = TrafficHistory()
+        history.record(counters(200, 20), at: 1)
+        XCTAssertTrue(history.samples.isEmpty)
+        history.record(counters(1400, 320), at: 3)
+        XCTAssertEqual(history.samples.last, TrafficRate(id: 3, received: 600, transmitted: 150))
+        history.record(counters(1400, 320), at: 4)
+        XCTAssertEqual(history.samples.last, TrafficRate(id: 4, received: 0, transmitted: 0))
+        history.record(counters(10, 0), at: 5)
+        XCTAssertTrue(history.samples.isEmpty)
+        history.record(.empty, at: 6)
+        history.record(counters(2000, 2000), at: 7)
+        XCTAssertTrue(history.samples.isEmpty)
+    }
+
     func testReconnectBudgetSurvivesFlappingAndExpires() {
         let now = Date(timeIntervalSince1970: 10000)
         var policy = AutomaticReconnectPolicy()
@@ -524,6 +542,16 @@ final class VPNRulesTests: XCTestCase {
         controller.showPopover()
         XCTAssertTrue(controller.isShown)
         controller.closePopover()
+    }
+
+    @MainActor
+    func testStatusButtonActionTogglesPanelTwice() throws {
+        let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
+        let button = try XCTUnwrap(controller.statusButton)
+        button.performClick(nil)
+        XCTAssertTrue(controller.isShown)
+        button.performClick(nil)
+        XCTAssertFalse(controller.isShown)
     }
 
     @MainActor
