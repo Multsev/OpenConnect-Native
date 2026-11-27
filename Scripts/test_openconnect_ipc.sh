@@ -52,14 +52,12 @@ trap cleanup EXIT
 
 request_path="$session_directory/request.plist"
 status_path="$session_directory/status.plist"
-otp_path="$session_directory/otp"
 pid_path="$session_directory/pid"
 
 plutil -create xml1 "$request_path"
 plutil -insert mode -string discover "$request_path"
 plutil -insert gateway -string invalid-url "$request_path"
 plutil -insert statusPath -string "$status_path" "$request_path"
-plutil -insert otpPath -string "$otp_path" "$request_path"
 plutil -insert pidPath -string "$pid_path" "$request_path"
 plutil -insert vpncScript -string /dev/null "$request_path"
 plutil -convert binary1 "$request_path"
@@ -70,7 +68,7 @@ chmod 600 "$request_path"
 [[ ! -e "$request_path" ]] || { echo "Helper request was not deleted." >&2; exit 1; }
 [[ -f "$status_path" ]] || { echo "Helper status was not created." >&2; exit 1; }
 plutil -extract networkInfo xml1 -o /dev/null "$status_path"
-[[ $(stat -f '%Lp' "$status_path") == 644 ]] || {
+[[ $(stat -f '%Lp' "$status_path") == 600 ]] || {
   echo "Helper status is not readable by the GUI." >&2
   exit 1
 }

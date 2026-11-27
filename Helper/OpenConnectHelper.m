@@ -24,7 +24,8 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property HelperMode mode;
 @property NSDictionary *request;
 @property NSString *statusPath;
-@property NSString *otpPath;
+@property BOOL waitingForOTP;
+@property (copy) NSString *pendingOTP;
 @property BOOL passwordSubmitted;
 @property BOOL otpSubmitted;
 @property BOOL groupApplied;
@@ -44,7 +45,6 @@ typedef NS_ENUM(NSInteger, HelperMode) { HelperModeDiscover, HelperModeConnect }
 @property NSDictionary *trafficStats;
 @property NSNumber *sessionExpiration;
 @property NSNumber *idleTimeoutSeconds;
-@property NSString *serverMessage;
 @property NSString *interfaceName;
 @property BOOL systemConfigurationApplied;
 @property dispatch_source_t statsTimer;
@@ -162,6 +162,26 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     [(__bridge HelperSession *)data updateTrafficStats:stats];
 }
 
+static BOOL sessionWriteFailed(NSDictionary *payload, NSString *path, NSNumber *peerUID) {
+    NSData *data = [NSPropertyListSerialization dataWithPropertyList:payload format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
+    if (!data) return YES;
+    unlink(path.fileSystemRepresentation);
+    int fd = open(path.fileSystemRepresentation, O_CREAT | O_EXCL | O_NOFOLLOW | O_WRONLY, 0600);
+    if (fd < 0) return YES;
+    const uint8_t *bytes = data.bytes;
+    NSUInteger offset = 0;
+    while (offset < data.length) {
+        ssize_t written = write(fd, bytes + offset, data.length - offset);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) break;
+        offset += written;
+    }
+    BOOL failed = offset != data.length || (peerUID && fchown(fd, peerUID.unsignedIntValue, (gid_t)-1) != 0);
+    if (close(fd) != 0) failed = YES;
+    if (failed) unlink(path.fileSystemRepresentation);
+    return failed;
+}
+
 @implementation HelperSession
 
 - (void)setConnectionStage:(NSString *)stage {
@@ -192,8 +212,7 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     if (self.sessionExpiration) payload[@"sessionExpiration"] = self.sessionExpiration;
     if (self.idleTimeoutSeconds) payload[@"idleTimeoutSeconds"] = self.idleTimeoutSeconds;
     NSString *temporary = [self.statusPath stringByAppendingString:@".new"];
-    [payload writeToFile:temporary atomically:YES];
-    chmod(temporary.fileSystemRepresentation, 0644);
+    if (sessionWriteFailed(payload, temporary, self.request[@"peerUID"])) return;
     rename(temporary.fileSystemRepresentation, self.statusPath.fileSystemRepresentation);
     }
 }
@@ -282,7 +301,6 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     int port = openconnect_get_port(self.vpn);
     if (port > 0) result[@"gatewayPort"] = @(port);
     if (fingerprint.length) result[@"certificateFingerprint"] = fingerprint;
-    if (self.serverMessage.length) result[@"serverMessage"] = self.serverMessage;
 
     [self setPositiveIntegerOption:@"Keepalive" key:@"keepaliveSeconds" list:cstpOptions result:result];
     [self setPositiveIntegerOption:@"DPD" key:@"dpdSeconds" list:cstpOptions result:result];
@@ -512,33 +530,47 @@ static void stats_callback(void *data, const struct oc_stats *stats) {
     return option->type == OC_FORM_OPT_PASSWORD && !self.passwordSubmitted;
 }
 
+- (BOOL)acceptOTP:(NSString *)value attempt:(NSString *)attempt uid:(uid_t)uid {
+    @synchronized (self) {
+        if (![value isKindOfClass:NSString.class] || !value.length || value.length > 256 ||
+            ![self.request[@"attemptID"] isEqual:attempt] || ![self.request[@"peerUID"] isEqual:@(uid)] ||
+            !self.waitingForOTP || self.pendingOTP || self.otpSubmitted || self.disconnectRequested ||
+            atomic_load(&cancellationRequested) || NSDate.date.timeIntervalSince1970 >= self.deadline) return NO;
+        self.pendingOTP = value;
+        return YES;
+    }
+}
+
 - (NSString *)waitForOTP {
-    if (self.otpSubmitted) return nil;
+    @synchronized (self) {
+        if (self.otpSubmitted) return nil;
+        self.waitingForOTP = YES;
+    }
     [self setConnectionStage:@"waitingOTP"];
     [self writeState:@"otpRequired" message:@"Enter the one-time code" groups:@[]];
-    while (NSDate.date.timeIntervalSince1970 < self.deadline) {
-        if (self.disconnectRequested || atomic_load(&cancellationRequested)) return nil;
-        NSData *data = [NSData dataWithContentsOfFile:self.otpPath];
-        if (data.length) {
-            unlink(self.otpPath.fileSystemRepresentation);
-            NSString *otp = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            otp = [otp stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-            if (otp.length) {
+    while (!self.disconnectRequested && !atomic_load(&cancellationRequested)) {
+        @synchronized (self) {
+            if (NSDate.date.timeIntervalSince1970 >= self.deadline) { self.timedOut = YES; break; }
+            if (self.pendingOTP) {
+                NSString *value = self.pendingOTP;
+                self.pendingOTP = nil;
+                self.waitingForOTP = NO;
                 self.otpSubmitted = YES;
                 self.deadline = NSDate.date.timeIntervalSince1970 + 45;
-                return otp;
+                return value;
             }
         }
-        usleep(200000);
+        usleep(50000);
     }
-    self.timedOut = YES;
+    @synchronized (self) {
+        self.waitingForOTP = NO;
+        self.pendingOTP = nil;
+    }
     return nil;
 }
 
 - (int)processForm:(struct oc_auth_form *)form {
     if (self.disconnectRequested || atomic_load(&cancellationRequested)) return OC_FORM_RESULT_CANCELLED;
-    NSString *banner = [stringValue(form->banner) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (banner.length) self.serverMessage = [banner substringToIndex:MIN((NSUInteger)2000, banner.length)];
     NSArray *groups = [self groupsFromForm:form];
     if (self.mode == HelperModeDiscover) {
         [self writeState:@"groupsAvailable" message:groups.count ? @"Choose a VPN group" : @"No group selection is required" groups:groups];
@@ -658,10 +690,9 @@ static int runRequest(NSDictionary *originalRequest) {
     NSMutableDictionary *request = [originalRequest mutableCopy];
     if (!request[@"vpncScript"]) request[@"vpncScript"] = [installedRuntimeRoot() stringByAppendingPathComponent:@"vpnc-script"];
     HelperSession *session = [HelperSession new];
-    activeSession = session;
     session.request = request;
+    @synchronized (HelperSession.class) { activeSession = session; }
     session.statusPath = request[@"statusPath"];
-    session.otpPath = request[@"otpPath"];
     session.mode = [request[@"mode"] isEqualToString:@"discover"] ? HelperModeDiscover : HelperModeConnect;
     session.commandFD = -1;
     session.deadline = NSDate.date.timeIntervalSince1970 + 45;
@@ -770,7 +801,7 @@ finished:
     }
     [session removeScopedSystemConfiguration];
     session.vpn = NULL;
-    activeSession = nil;
+    @synchronized (HelperSession.class) { activeSession = nil; }
     NSNumber *peerUID = request[@"peerUID"];
     if (peerUID) {
         NSString *directory = [request[@"statusPath"] stringByDeletingLastPathComponent];
@@ -796,21 +827,19 @@ static BOOL validateRequest(NSDictionary *request, uid_t peerUID, NSString **err
         return NO;
     }
     if (!matchesSessionPath(statusPath, directory, @"status.plist") ||
-        !matchesSessionPath(request[@"otpPath"], directory, @"otp") ||
         !matchesSessionPath(request[@"pidPath"], directory, @"pid")) {
         if (errorMessage) *errorMessage = @"Недопустимые пути VPN-сеанса";
         return NO;
     }
-    struct stat otpInfo;
-    NSString *otpPath = request[@"otpPath"];
-    if (lstat(otpPath.fileSystemRepresentation, &otpInfo) || !S_ISREG(otpInfo.st_mode) || otpInfo.st_uid != peerUID || (otpInfo.st_mode & 0077) ||
-        lstat(statusPath.fileSystemRepresentation, &otpInfo) == 0 || errno != ENOENT ||
-        lstat([request[@"pidPath"] fileSystemRepresentation], &otpInfo) == 0 || errno != ENOENT) {
+    struct stat existing;
+    if (lstat(statusPath.fileSystemRepresentation, &existing) == 0 || errno != ENOENT ||
+        lstat([request[@"pidPath"] fileSystemRepresentation], &existing) == 0 || errno != ENOENT) {
         if (errorMessage) *errorMessage = @"Недопустимые файлы VPN-сеанса";
         return NO;
     }
     NSString *mode = request[@"mode"];
     NSString *gateway = request[@"gateway"];
+    if (![request[@"attemptID"] isKindOfClass:NSString.class] || ![[NSUUID alloc] initWithUUIDString:request[@"attemptID"]]) return NO;
     if ((!([mode isEqualToString:@"connect"] || [mode isEqualToString:@"discover"])) || ![gateway isKindOfClass:NSString.class] || !gateway.length) {
         if (errorMessage) *errorMessage = @"Недопустимый запрос VPN";
         return NO;
@@ -844,7 +873,8 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
     if ([command isEqualToString:@"ping"]) { sendReply(event, YES, @""); return; }
     if ([command isEqualToString:@"disconnect"]) {
         atomic_store(&cancellationRequested, true);
-        HelperSession *session = activeSession;
+        HelperSession *session;
+        @synchronized (HelperSession.class) { session = activeSession; }
         if (session) session.disconnectRequested = YES;
         sendSessionCommand(session, OC_CMD_CANCEL);
         // Acknowledge only after the session queue has restored DNS and
@@ -854,12 +884,19 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
         });
         return;
     }
-    if (![command isEqualToString:@"connect"]) { sendReply(event, NO, @"Неизвестная команда"); return; }
+    if (![command isEqualToString:@"connect"] && ![command isEqualToString:@"submitOTP"]) { sendReply(event, NO, @"Неизвестная команда"); return; }
     size_t length = 0;
     const void *bytes = xpc_dictionary_get_data(event, "payload", &length);
-    NSData *data = bytes && length ? [NSData dataWithBytes:bytes length:length] : nil;
+    NSData *data = bytes && length && length <= 65536 ? [NSData dataWithBytes:bytes length:length] : nil;
     id decoded = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil] : nil;
     NSDictionary *request = [decoded isKindOfClass:NSDictionary.class] ? decoded : nil;
+    if ([command isEqualToString:@"submitOTP"]) {
+        HelperSession *session;
+        @synchronized (HelperSession.class) { session = activeSession; }
+        BOOL accepted = [session acceptOTP:request[@"otp"] attempt:request[@"attemptID"] uid:xpc_connection_get_euid(peer)];
+        sendReply(event, accepted, accepted ? @"" : @"Запрос одноразового кода уже недействителен");
+        return;
+    }
     NSString *validationError = nil;
     if (!request || !validateRequest(request, xpc_connection_get_euid(peer), &validationError)) {
         sendReply(event, NO, validationError ?: @"Повреждённый запрос VPN");

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 
 protocol VPNProfileStore {
     func load() -> VPNProfile
@@ -20,22 +21,39 @@ final class UserDefaultsVPNProfileStore: VPNProfileStore {
     }
 
     func save(_ profile: VPNProfile) throws {
+        guard profile.safeGateway != nil else { throw VPNError.invalidGateway }
         defaults.set(try JSONEncoder().encode(profile.normalized()), forKey: key)
     }
 }
 
 protocol PasswordStore: AnyObject {
+    func scoped(to profile: VPNProfile) -> PasswordStore
     var hasPassword: Bool { get }
     func read() throws -> String?
     func save(_ password: String) throws
     func delete() throws
 }
 
+extension PasswordStore {
+    func scoped(to profile: VPNProfile) -> PasswordStore { self }
+}
+
 final class KeychainPasswordStore: PasswordStore {
     private let service = "com.max.ciscoconnect"
-    private let account = "primary-vpn-password"
+    private let account: String
 
-    var hasPassword: Bool { (try? read())?.isEmpty == false }
+    init(account: String = "unconfigured") { self.account = account }
+
+    func scoped(to profile: VPNProfile) -> PasswordStore {
+        let digest = SHA256.hash(data: Data(profile.credentialScope.utf8))
+        return KeychainPasswordStore(account: digest.map { String(format: "%02x", $0) }.joined())
+    }
+
+    var hasPassword: Bool {
+        let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service,
+                                      kSecAttrAccount: account, kSecMatchLimit: kSecMatchLimitOne]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
 
     func read() throws -> String? {
         let query: [CFString: Any] = [
@@ -85,6 +103,10 @@ struct KeychainError: LocalizedError {
 /// Serializes potentially blocking Security.framework calls away from UI work.
 enum PasswordStoreWorker {
     private static let queue = DispatchQueue(label: "com.max.ciscoconnect.keychain", qos: .userInitiated)
+
+    static func contains(_ store: PasswordStore) async -> Bool {
+        (try? await perform { store.hasPassword }) ?? false
+    }
 
     static func read(_ store: PasswordStore) async throws -> String? {
         let started = PerformanceMeasurements.start()

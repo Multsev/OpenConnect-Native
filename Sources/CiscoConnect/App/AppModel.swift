@@ -19,13 +19,18 @@ final class AppModel {
     @ObservationIgnored private let reconnectDelayScale: Double
     @ObservationIgnored private let reconnectDefaults: UserDefaults
     @ObservationIgnored var onOTPRequired: (() -> Void)?
-    var profile: VPNProfile
+    var profile: VPNProfile {
+        didSet {
+            if oldValue.credentialScope != profile.credentialScope { password = "" }
+        }
+    }
     var password = ""
     var otp = ""
     var availableGroups: [VPNGroup] = []
     var isDiscoveringGroups = false
     var status: TunnelStatus = .disconnected { didSet {
         onConnectionStateChange?()
+        if !status.canDisconnect && !status.state.isBusy { pendingPassword = ""; pendingProfile = nil }
         if oldValue.state != status.state {
             trafficHistory = TrafficHistory()
             updateHealthMonitor()
@@ -60,13 +65,15 @@ final class AppModel {
     var connectionDetails: VPNConnectionDetails = .empty
     private(set) var trafficHistory = TrafficHistory()
     var trafficStats: VPNTrafficStats = .empty
-    private(set) var hasStoredPassword = false
+    private var storedScope: String?
+    var hasStoredPassword: Bool { storedScope == profile.credentialScope }
     private(set) var isLoadingSavedPassword = false
     var errorMessage: String? { didSet { onConnectionStateChange?() } }
     @ObservationIgnored var onConnectionStateChange: (() -> Void)?
     @ObservationIgnored private var statusPollTask: Task<Void, Never>?
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var operationID = UUID()
+    @ObservationIgnored private var pendingProfile: VPNProfile?
     @ObservationIgnored private var pendingPassword = ""
     @ObservationIgnored private var scheduledExpiration: Date?
     @ObservationIgnored private let statusPollInterval: Duration
@@ -100,8 +107,7 @@ final class AppModel {
         self.statusPollInterval = statusPollInterval
         profile = profileStore.load()
         if loadPasswordOnLaunch {
-            password = (try? passwordStore.read()) ?? ""
-            hasStoredPassword = !password.isEmpty
+            if passwordStore.scoped(to: profile).hasPassword { storedScope = profile.credentialScope }
         }
         status = connectionService.status
         self.sessionExpirationNotifier.cancel()
@@ -136,10 +142,8 @@ final class AppModel {
 
     private func loadSavedPassword() async {
         defer { isLoadingSavedPassword = false }
-        let saved = (try? await PasswordStoreWorker.read(passwordStore)) ?? ""
-        hasStoredPassword = !saved.isEmpty
-        // Do not replace edits made while Keychain was responding.
-        if password.isEmpty { password = saved }
+        let savedProfile = profile
+        if await PasswordStoreWorker.contains(passwordStore.scoped(to: savedProfile)) { storedScope = savedProfile.credentialScope }
     }
     var hasConfiguredProfile: Bool {
         profile.validationErrors(hasStoredPassword: hasStoredPassword || !password.isEmpty).isEmpty
@@ -285,13 +289,16 @@ final class AppModel {
             }
             try Task.checkCancellation()
             try profileStore.save(profile)
+            let attemptedProfile = profile
             let replacementPassword = password
+            password = ""
             try await connectionService.connect(
                 profile: profile,
                 passwordOverride: replacementPassword.isEmpty ? nil : replacementPassword,
                 otp: otp
             )
             guard operationID == id else { return }
+            pendingProfile = attemptedProfile
             pendingPassword = replacementPassword
             status = connectionService.status
             pollTunnelStatus()
@@ -394,11 +401,11 @@ final class AppModel {
                 if updated.state == .connected {
                     self.trafficHistory.record(updated.trafficStats, at: ProcessInfo.processInfo.systemUptime)
                 }
-                if updated.state == .connected, !self.pendingPassword.isEmpty {
+                if updated.state == .connected, let pendingProfile = self.pendingProfile, !self.pendingPassword.isEmpty {
                     let passwordToSave = self.pendingPassword
                     do {
-                        try await PasswordStoreWorker.save(passwordToSave, to: self.passwordStore)
-                        self.hasStoredPassword = true
+                        try await PasswordStoreWorker.save(passwordToSave, to: self.passwordStore.scoped(to: pendingProfile))
+                        self.storedScope = pendingProfile.credentialScope
                     } catch {
                         self.errorMessage = error.localizedDescription
                     }

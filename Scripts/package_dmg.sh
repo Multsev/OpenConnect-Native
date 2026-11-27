@@ -62,7 +62,7 @@ plutil -extract CFBundleExecutable raw "$staging/OpenConnect Native.app/Contents
 codesign --verify --deep --strict "$staging/OpenConnect Native.app"
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname "OpenConnect Native" -srcfolder "$staging" -ov -format UDZO "$dmg_path"
-shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
+
 
 # Verify the final renamed bundle from the disk image, then discard all
 # intermediate products. Releases remains the only user-facing output folder.
@@ -84,6 +84,8 @@ attach_for_verification() {
 trap cleanup_verification EXIT
 attach_for_verification
 codesign --verify --deep --strict "$verify_mount/OpenConnect Native.app"
+python3 Scripts/check_dmg.py "$verify_mount"
+(cd "$release_root" && shasum -a 256 "$(basename "$dmg_path")" > "$(basename "$dmg_path").sha256")
 hdiutil detach "$verify_mount" >/dev/null
 rmdir "$verify_mount"
 trap - EXIT

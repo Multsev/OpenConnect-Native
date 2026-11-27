@@ -11,6 +11,14 @@ final class PrivilegedHelperConnection {
         try await send(command: "connect", payload: payload)
     }
 
+    func submitOTP(_ value: String, attemptID: UUID) async throws {
+        let payload = try PropertyListSerialization.data(
+            fromPropertyList: ["attemptID": attemptID.uuidString, "otp": value],
+            format: .binary, options: 0
+        )
+        try await send(command: "submitOTP", payload: payload)
+    }
+
     func disconnect() async throws {
         let started = PerformanceMeasurements.start()
         defer { PerformanceMeasurements.shared.record(.helperStop, since: started) }
@@ -60,7 +68,8 @@ final class PrivilegedHelperConnection {
     }
 
     private func makeConnection() -> xpc_connection_t {
-        let connection = xpc_connection_create_mach_service(Self.serviceName, .main, 0)
+        // Resolve only the system LaunchDaemon before sending authentication material.
+        let connection = xpc_connection_create_mach_service(Self.serviceName, .main, UInt64(XPC_CONNECTION_MACH_SERVICE_PRIVILEGED))
         xpc_connection_set_event_handler(connection) { _ in }
         xpc_connection_activate(connection)
         return connection
