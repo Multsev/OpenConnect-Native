@@ -24,7 +24,7 @@ final class VPNConnectionService {
 
     func discoverGroups(profile: VPNProfile) async throws -> [VPNGroup] {
         let normalized = profile.normalized()
-        guard let gateway = URL(string: normalized.gateway), gateway.scheme == "https", gateway.host != nil else { throw VPNError.invalidGateway }
+        guard let gateway = normalized.safeGateway else { throw VPNError.invalidGateway }
         return try await tunnel.discoverGroups(gateway: gateway)
     }
 
@@ -33,7 +33,8 @@ final class VPNConnectionService {
         operationID = operation
         let currentTime = now()
         if let retryDate = attemptGuard.retryDate(now: currentTime) { throw VPNError.retryBlocked(retryDate) }
-        let password = passwordOverride?.isEmpty == false ? passwordOverride! : try await PasswordStoreWorker.read(passwordStore)
+        guard profile.safeGateway != nil else { throw VPNError.invalidGateway }
+        let password = passwordOverride?.isEmpty == false ? passwordOverride! : try await PasswordStoreWorker.read(passwordStore.scoped(to: profile))
         try Task.checkCancellation()
         guard operationID == operation else { throw CancellationError() }
         let errors = profile.validationErrors(hasStoredPassword: password?.isEmpty == false)

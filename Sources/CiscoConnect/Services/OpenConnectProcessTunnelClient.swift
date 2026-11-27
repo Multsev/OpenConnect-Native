@@ -9,7 +9,6 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
     private let helperInstaller: PrivilegedHelperInstaller
     private var sessionDirectory: URL?
     private var statusFile: URL?
-    private var otpFile: URL?
     private var pidFile: URL?
     private var sessionStartedAt = Date()
     private var attemptID: UUID?
@@ -62,7 +61,6 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
         pidFile = paths.pid
         sessionDirectory = paths.directory
         statusFile = paths.status
-        otpFile = paths.otp
         attemptID = request.attemptID
         PerformanceMeasurements.shared.record(.requestPreparation, since: preparationStarted)
         let start = Task { try await helperConnection.connect(payload: payload) }
@@ -81,11 +79,8 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
     }
 
     func submitOTP(_ value: String) async throws {
-        guard let otpFile, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw VPNError.otpNotRequested }
-        // The root helper protects the session directory from path substitution;
-        // the pre-created OTP file remains user-owned and writable in place.
-        try Data(value.utf8).write(to: otpFile)
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otpFile.path)
+        guard let attemptID else { throw VPNError.otpNotRequested }
+        try await helperConnection.submitOTP(value, attemptID: attemptID)
     }
 
     func disconnect() async throws -> TunnelStatus {
@@ -164,12 +159,9 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let requestFile = directory.appending(path: "request.plist")
         let status = directory.appending(path: "status.plist")
-        let otp = directory.appending(path: "otp")
         let pid = directory.appending(path: "pid")
-        try Data().write(to: otp)
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otp.path)
-        var payload: [String: Any] = ["mode": mode, "gateway": gateway.absoluteString, "statusPath": status.path, "otpPath": otp.path, "pidPath": pid.path, "vpncScript": script.path]
-        if let request { payload.merge(["username": request.username, "password": request.password, "group": request.group]) { _, new in new } }
+        var payload: [String: Any] = ["mode": mode, "gateway": gateway.absoluteString, "statusPath": status.path, "pidPath": pid.path, "vpncScript": script.path]
+        if let request { payload.merge(["attemptID": request.attemptID.uuidString, "username": request.username, "password": request.password, "group": request.group]) { _, new in new } }
         let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
         // Only group discovery launches a file-based helper. Connection requests
         // go directly over XPC, avoiding a write/read/delete cycle with credentials.
@@ -177,7 +169,7 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
             try data.write(to: requestFile, options: .atomic)
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: requestFile.path)
         }
-        return SessionPaths(directory: directory, helper: helper, request: requestFile, status: status, otp: otp, pid: pid, payload: data)
+        return SessionPaths(directory: directory, helper: helper, request: requestFile, status: status, pid: pid, payload: data)
     }
 
     private func runtimePaths() throws -> (helper: URL, script: URL) {
@@ -243,7 +235,7 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
     }
 
     private func cleanUp() {
-        attemptID = nil; statusFile = nil; otpFile = nil; pidFile = nil
+        attemptID = nil; statusFile = nil; pidFile = nil
         if let sessionDirectory {
             do {
                 try fileManager.removeItem(at: sessionDirectory)
@@ -265,7 +257,7 @@ actor OpenConnectProcessTunnelClient: TunnelClient {
 
 }
 
-private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let otp: URL; let pid: URL; let payload: Data }
+private struct SessionPaths { let directory: URL; let helper: URL; let request: URL; let status: URL; let pid: URL; let payload: Data }
 private struct HelperSnapshot {
     let state: String
     let message: String

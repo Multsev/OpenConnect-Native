@@ -25,7 +25,7 @@ struct ProfileSettingsView: View {
                 }
                 inputRow("Пароль") {
                     HStack(spacing: 6) {
-                        ProfileTextField(text: $model.password, placeholder: "Пароль", editable: !profileFieldsLocked, secure: !showsPassword)
+                        ProfileTextField(text: $model.password, placeholder: model.hasStoredPassword ? "Сохранён в Связке ключей" : "Пароль", editable: !profileFieldsLocked, secure: !showsPassword)
                             .id(showsPassword)
                         Button {
                             showsPassword.toggle()

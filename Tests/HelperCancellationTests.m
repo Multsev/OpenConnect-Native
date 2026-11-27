@@ -59,7 +59,6 @@ int main(void) {
         NSDictionary *request = @{
             @"mode": @"connect", @"gateway": @"https://invalid.example",
             @"statusPath": [directory stringByAppendingPathComponent:@"status.plist"],
-            @"otpPath": [directory stringByAppendingPathComponent:@"otp"],
             @"pidPath": [directory stringByAppendingPathComponent:@"pid"]
         };
         // A stop received after reservation but before session startup must
@@ -71,7 +70,18 @@ int main(void) {
 
         HelperSession *session = [HelperSession new];
         session.statusPath = request[@"statusPath"];
-        session.otpPath = request[@"otpPath"];
+        session.request = @{@"attemptID": @"synthetic-attempt", @"peerUID": @(getuid())};
+        session.waitingForOTP = YES;
+        session.deadline = NSDate.date.timeIntervalSince1970 + 60;
+        atomic_store(&cancellationRequested, false);
+        assert(![session acceptOTP:@"fixture" attempt:@"old" uid:getuid()]);
+        assert(![session acceptOTP:@"fixture" attempt:@"synthetic-attempt" uid:getuid()+1]);
+        assert([session acceptOTP:@"fixture" attempt:@"synthetic-attempt" uid:getuid()]);
+        assert(![session acceptOTP:@"duplicate" attempt:@"synthetic-attempt" uid:getuid()]);
+        assert([[session waitForOTP] isEqual:@"fixture"]);
+        assert(!session.pendingOTP && !session.waitingForOTP);
+        assert(![session acceptOTP:@"late" attempt:@"synthetic-attempt" uid:getuid()]);
+        session.otpSubmitted = NO;
         session.commandFD = -1;
         atomic_store(&cancellationRequested, false);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{

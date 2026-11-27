@@ -2,7 +2,7 @@ name: Build release
 
 on:
   push:
-    branches: ["main"]
+    branches: ["**"]
     tags: ["v*"]
   pull_request:
 
@@ -14,9 +14,17 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: brew install gitleaks
+      - name: Scan reachable history and Git identities
+        env:
+          AUDIT_REF: ${{ github.event.pull_request.head.sha || github.ref }}
+        run: python3 Scripts/check_publication.py history "$AUDIT_REF"
       - name: Run unit tests
         run: swift test
-      - name: Test Codex CLI
+      - name: Run Python tests
         run: python3 -m unittest discover -s Tests -p 'test_*.py'
       - name: Test release retention
         run: ./Tests/ReleasePipelineTests.sh
@@ -25,31 +33,43 @@ jobs:
     if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: brew install xcodegen openconnect gitleaks
+      - name: Build and inspect signed disk image
+        run: ./Scripts/package_dmg.sh development
+      - name: Verify release checksum
+        working-directory: Releases
+        run: shasum -a 256 -c OpenConnect-Native-*.dmg.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenConnect-Native-DMG
+          path: Releases/OpenConnect-Native-*.dmg*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: dmg
+    runs-on: macos-15
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install build dependencies
-        run: brew install xcodegen openconnect
-      - name: Build self-contained, ad-hoc-signed DMG
-        run: ./Scripts/package_dmg.sh development
-      - name: Verify release checksum
-        run: shasum -a 256 -c Releases/OpenConnect-Native-*.dmg.sha256
-      - name: Upload pull-request artifact
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
         with:
           name: OpenConnect-Native-DMG
-          path: Releases/OpenConnect-Native-*.dmg*
-      - name: Publish GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/v')
+          path: Releases
+      - name: Publish verified bytes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" Releases/OpenConnect-Native-*.dmg Releases/OpenConnect-Native-*.dmg.sha256 --generate-notes || \
-          gh release upload "$GITHUB_REF_NAME" Releases/OpenConnect-Native-*.dmg Releases/OpenConnect-Native-*.dmg.sha256 --clobber
-      - name: Keep only the two latest GitHub releases
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./Scripts/prune_releases.sh github 2
+          source version.env
+          [[ "$GITHUB_REF_NAME" == "v$MARKETING_VERSION" ]]
+          asset="OpenConnect-Native-$MARKETING_VERSION.dmg"
+          (cd Releases && shasum -a 256 -c "$asset.sha256")
+          gh release create "$GITHUB_REF_NAME" "Releases/$asset" "Releases/$asset.sha256" --verify-tag --generate-notes
+          ./Scripts/prune_releases.sh github 2

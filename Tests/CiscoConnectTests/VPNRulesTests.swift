@@ -4,6 +4,14 @@ import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testGatewayRejectsEmbeddedCredentialsAndPrivateParameters() {
+        for url in ["https://u:p@example.test", "https://example.test/?key=fixture", "https://example.test/#value"] {
+            XCTAssertNil(VPNProfile(gateway: url).safeGateway)
+        }
+        XCTAssertNotEqual(VPNProfile(gateway: "one.example.test", username: "fixture").credentialScope,
+                          VPNProfile(gateway: "two.example.test", username: "fixture").credentialScope)
+    }
+
     func testRoadFillsAndSlowsAsThroughputIncreases() {
         let empty = TrafficLane(bytesPerSecond: 0)
         let light = TrafficLane(bytesPerSecond: 128)
@@ -415,7 +423,7 @@ final class VPNRulesTests: XCTestCase {
     }
 
     @MainActor
-    func testAppModelLoadsStoredPasswordForProtectedField() {
+    func testAppModelChecksSavedPasswordWithoutPrefillingForm() {
         let passwordStore = MemoryPasswordStore(password: "secret")
         let model = AppModel(
             profileStore: MemoryProfileStore(profile: VPNProfile()),
@@ -428,7 +436,7 @@ final class VPNRulesTests: XCTestCase {
             helperInstaller: PrivilegedHelperInstaller()
         )
 
-        XCTAssertEqual(model.password, "secret")
+        XCTAssertEqual(model.password, "")
         XCTAssertTrue(model.hasStoredPassword)
     }
 
@@ -716,6 +724,7 @@ final class VPNRulesTests: XCTestCase {
         }
         let model = makeCancellationModel(RecordingTunnelClient())
         model.profile = VPNProfile(gateway: "https://vpn.example.test", group: "staff", username: "test-user")
+        model.password = "fixture"
         func fields(_ view: NSView) -> [NSTextField] {
             (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
         }
@@ -750,6 +759,7 @@ final class VPNRulesTests: XCTestCase {
         XCTAssertEqual(host.fittingSize.width, 360, accuracy: 1)
         XCTAssertTrue(fields(host).contains { $0.placeholderString == "vpn.example.com" })
         model.profile = VPNProfile(gateway: "https://vpn.example.test", group: "staff", username: "test-user")
+        model.password = "fixture"
         XCTAssertTrue(model.saveProfileSettings())
         XCTAssertFalse(RootView(model: model).needsConfiguration)
         XCTAssertNil(model.errorMessage)
@@ -890,7 +900,7 @@ final class VPNRulesTests: XCTestCase {
                     try await Task.sleep(for: .milliseconds(40))
                     host.setFrameSize(host.fittingSize)
                     host.layoutSubtreeIfNeeded()
-                    let profile = fields(host).filter { ["vpn.example.com", "Логин", "Пароль", "Группа"].contains($0.placeholderString ?? "") }
+                    let profile = fields(host).filter { ["vpn.example.com", "Логин", "Пароль", "Сохранён в Связке ключей", "Группа"].contains($0.placeholderString ?? "") }
                     XCTAssertEqual(profile.count, hasGroups ? 3 : 4)
                     for field in profile {
                         let key = try XCTUnwrap(field.placeholderString)

@@ -13,10 +13,22 @@ struct VPNProfile: Codable, Equatable, Sendable {
         )
     }
 
+    var credentialScope: String {
+        let profile = normalized()
+        return profile.gateway + "\n" + profile.username
+    }
+
+    var safeGateway: URL? {
+        guard let parts = URLComponents(string: normalized().gateway),
+              parts.scheme?.lowercased() == "https", let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil else { return nil }
+        return parts.url
+    }
+
     func validationErrors(hasStoredPassword: Bool) -> [String] {
         let value = normalized()
         var errors: [String] = []
-        guard let url = URL(string: value.gateway), url.scheme == "https", url.host != nil else {
+        guard value.safeGateway != nil else {
             return ["Enter an HTTPS address for the VPN gateway."]
         }
         if value.username.isEmpty { errors.append("Enter a VPN username.") }

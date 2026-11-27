@@ -11,6 +11,14 @@ final class PrivilegedHelperConnection {
         try await send(command: "connect", payload: payload)
     }
 
+    func submitOTP(_ value: String, attemptID: UUID) async throws {
+        let payload = try PropertyListSerialization.data(
+            fromPropertyList: ["attemptID": attemptID.uuidString, "otp": value],
+            format: .binary, options: 0
+        )
+        try await send(command: "submitOTP", payload: payload)
+    }
+
     func disconnect() async throws {
         let started = PerformanceMeasurements.start()
         defer { PerformanceMeasurements.shared.record(.helperStop, since: started) }
