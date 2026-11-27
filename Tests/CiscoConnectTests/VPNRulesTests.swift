@@ -4,6 +4,24 @@ import SwiftUI
 @testable import CiscoConnect
 
 final class VPNRulesTests: XCTestCase {
+    func testTrafficHistoryUsesElapsedTimeAndResetsOnMissingOrDecreasingCounters() {
+        func counters(_ rx: Int, _ tx: Int) -> VPNTrafficStats {
+            VPNTrafficStats(propertyList: ["receivedBytes": rx, "transmittedBytes": tx])
+        }
+        var history = TrafficHistory()
+        history.record(counters(200, 20), at: 1)
+        XCTAssertTrue(history.samples.isEmpty)
+        history.record(counters(1400, 320), at: 3)
+        XCTAssertEqual(history.samples.last, TrafficRate(id: 3, received: 600, transmitted: 150))
+        history.record(counters(1400, 320), at: 4)
+        XCTAssertEqual(history.samples.last, TrafficRate(id: 4, received: 0, transmitted: 0))
+        history.record(counters(10, 0), at: 5)
+        XCTAssertTrue(history.samples.isEmpty)
+        history.record(.empty, at: 6)
+        history.record(counters(2000, 2000), at: 7)
+        XCTAssertTrue(history.samples.isEmpty)
+    }
+
     func testReconnectBudgetSurvivesFlappingAndExpires() {
         let now = Date(timeIntervalSince1970: 10000)
         var policy = AutomaticReconnectPolicy()
@@ -19,6 +37,7 @@ final class VPNRulesTests: XCTestCase {
     func testAutomaticReconnectAfterExpirationRequestsOTPAndStopsOnRejection() async {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let tunnel = RecordingTunnelClient()
+        tunnel.initialConnectionStatus = tunnel.status
         let passwords = MemoryPasswordStore(password: "secret")
         let service = VPNConnectionService(passwordStore: passwords, attemptGuard: RecordingAttemptGuard(), tunnel: tunnel)
         let model = AppModel(profileStore: MemoryProfileStore(profile: VPNProfile(gateway: "vpn.example.test", group: "staff", username: "max")), passwordStore: passwords, connectionService: service, helperInstaller: PrivilegedHelperInstaller(), statusPollInterval: .milliseconds(10), reconnectDefaults: defaults, reconnectDelayScale: 0)
@@ -521,9 +540,25 @@ final class VPNRulesTests: XCTestCase {
         )
         controller.closePopover()
         XCTAssertFalse(controller.isShown)
+        try? await Task.sleep(for: .milliseconds(100))
         controller.showPopover()
+        try? await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(controller.isShown)
         controller.closePopover()
+    }
+
+    @MainActor
+    func testStatusButtonActionTogglesPanelTwice() async throws {
+        let controller = MenuBarPopoverController(model: makeCancellationModel(RecordingTunnelClient()))
+        let button = try XCTUnwrap(controller.statusButton)
+        try await Task.sleep(for: .milliseconds(150))
+        button.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(controller.isShown)
+        try await Task.sleep(for: .milliseconds(150))
+        button.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertFalse(controller.isShown)
     }
 
     @MainActor
@@ -955,15 +990,16 @@ final class VPNRulesTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 460, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         defer { window.close() }
         for _ in 0..<2 {
+            controller.view.layoutSubtreeIfNeeded()
             model.status.state = .otpRequired
             let focused = await waitUntil {
                 controller.view.layoutSubtreeIfNeeded()
-                guard let editor = window.firstResponder as? NSTextView,
-                      let field = editor.delegate as? NSTextField else { return false }
-                return field.placeholderString == "Код OTP" && editor.string == "246810"
+                guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return false }
+                return editor.string == model.otp
             }
             XCTAssertTrue(focused, "New OTP field should own the keyboard field editor")
             model.status.state = .authenticating
@@ -1200,6 +1236,7 @@ private final class RecordingSessionExpirationNotifier: SessionExpirationNotifyi
 @MainActor
 private final class RecordingTunnelClient: TunnelClient {
     var status = TunnelStatus(state: .authenticating, message: "Authenticating", attemptID: nil)
+    var initialConnectionStatus: TunnelStatus?
     var discoveredGroups = [VPNGroup(id: "staff", label: "Staff")]
     var discoveryCount = 0
     var connectionCount = 0
@@ -1223,6 +1260,7 @@ private final class RecordingTunnelClient: TunnelClient {
     }
     func connect(request: CiscoAuthenticationRequest) async throws -> TunnelStatus {
         connectionCount += 1
+        if let initialConnectionStatus { status = initialConnectionStatus }
         attemptID = request.attemptID
         status.attemptID = request.attemptID
         if suspendConnect { return try await withCheckedThrowingContinuation { connectContinuation = $0 } }
