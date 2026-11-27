@@ -34,7 +34,7 @@ struct RootView: View {
                         header
                         statusView
                         if model.status.state == .connected {
-                            TrafficHistoryView(history: model.trafficHistory)
+                            TrafficRoadView(history: model.trafficHistory)
                         }
                         if let message = model.reconnectMessage {
                             Text(message).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
