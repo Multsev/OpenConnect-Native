@@ -14,7 +14,8 @@ struct TrafficRoadView: View {
                     rateLabel("↑ Передача", latest.transmitted, .indigo)
                 }
                 TrafficRoad(received: latest.received, transmitted: latest.transmitted,
-                            animates: isVisible && !reduceMotion)
+                            animates: isVisible && !reduceMotion, sampledAt: latest.id,
+                            inboundOffset: history.inboundOffset, outboundOffset: history.outboundOffset)
             } else {
                 Text("Ожидание статистики трафика…").foregroundStyle(.secondary)
             }
@@ -32,50 +33,20 @@ struct TrafficRoadView: View {
     }
 }
 
-/// A fixed visual scale for throughput. VPN peers do not advertise channel capacity.
-struct TrafficLane {
-    let count: Int
-    let speed: Double
-
-    init(bytesPerSecond: Double) {
-        guard bytesPerSecond > 0 else {
-            count = 0
-            speed = 0
-            return
-        }
-        let density = min(log1p(bytesPerSecond / 4096) / log1p(1024), 1)
-        count = max(1, Int(ceil(16 * density)))
-        speed = 4 + 72 * pow(1 - density, 1.6)
-    }
-}
-
-private struct RoadMotion {
-    var distance = 0.0
-    var time = Date.timeIntervalSinceReferenceDate
-    var speed = 0.0
-
-    func offset(at now: TimeInterval) -> Double { distance + max(0, now - time) * speed }
-
-    mutating func changeSpeed(to newSpeed: Double, at now: TimeInterval) {
-        distance = offset(at: now)
-        time = now
-        speed = newSpeed
-    }
-}
-
 struct TrafficRoad: View {
     let received: Double
     let transmitted: Double
     let animates: Bool
-    @State private var inbound = RoadMotion()
-    @State private var outbound = RoadMotion()
+    let sampledAt: TimeInterval
+    var inboundOffset: Double = 0
+    var outboundOffset: Double = 0
 
     var body: some View {
         let rx = TrafficLane(bytesPerSecond: received)
         let tx = TrafficLane(bytesPerSecond: transmitted)
         let moving = animates && rx.count + tx.count > 0
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: !moving)) { tick in
-            let now = tick.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: !moving)) { _ in
+            let elapsed = moving ? max(0, ProcessInfo.processInfo.systemUptime - sampledAt) : 0
             Canvas { context, size in
                 let bounds = CGRect(origin: .zero, size: size)
                 let asphalt = Path(roundedRect: bounds, cornerRadius: 6)
@@ -87,17 +58,12 @@ struct TrafficRoad: View {
                 context.stroke(divider, with: .color(.secondary.opacity(0.55)),
                                style: StrokeStyle(lineWidth: 1, dash: [5, 5]))
                 drawLane(context, width: size.width, y: size.height * 0.25, count: rx.count,
-                         offset: inbound.offset(at: now), direction: 1, color: .teal)
+                         offset: animates ? inboundOffset + elapsed * rx.speed : 0, direction: 1, color: .teal)
                 drawLane(context, width: size.width, y: size.height * 0.75, count: tx.count,
-                         offset: outbound.offset(at: now), direction: -1, color: .indigo)
+                         offset: animates ? outboundOffset + elapsed * tx.speed : 0, direction: -1, color: .indigo)
             }
         }
         .frame(height: 38)
-        .onChange(of: [moving ? rx.speed : 0, moving ? tx.speed : 0], initial: true) { _, speeds in
-            let now = Date.timeIntervalSinceReferenceDate
-            inbound.changeSpeed(to: speeds[0], at: now)
-            outbound.changeSpeed(to: speeds[1], at: now)
-        }
         .accessibilityHidden(true)
     }
 
