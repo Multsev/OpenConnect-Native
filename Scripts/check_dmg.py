@@ -48,6 +48,8 @@ def audit(root):
         machine = dylib or name in BINARY
         if findings(data, name, terms, binary=machine or vendor or name == RES + ICON):
             raise ValueError("Private data in bundle")
+        if name in BINARY and findings(data.replace(b"\0", b"\n"), name, terms):
+            raise ValueError("Private value in first-party executable")
         if machine:
             subprocess.run(["otool", "-hv", file], check=True, stdout=subprocess.DEVNULL)
             if data[:4].hex() not in {"cffaedfe","feedfacf","cafebabe","cafebabf"}:

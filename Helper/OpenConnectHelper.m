@@ -542,8 +542,10 @@ static BOOL sessionWriteFailed(NSDictionary *payload, NSString *path, NSNumber *
 }
 
 - (NSString *)waitForOTP {
-    if (self.otpSubmitted) return nil;
-    self.waitingForOTP = YES;
+    @synchronized (self) {
+        if (self.otpSubmitted) return nil;
+        self.waitingForOTP = YES;
+    }
     [self setConnectionStage:@"waitingOTP"];
     [self writeState:@"otpRequired" message:@"Enter the one-time code" groups:@[]];
     while (!self.disconnectRequested && !atomic_load(&cancellationRequested)) {
@@ -885,7 +887,7 @@ static void handleMessage(xpc_connection_t peer, xpc_object_t event) {
     if (![command isEqualToString:@"connect"] && ![command isEqualToString:@"submitOTP"]) { sendReply(event, NO, @"Неизвестная команда"); return; }
     size_t length = 0;
     const void *bytes = xpc_dictionary_get_data(event, "payload", &length);
-    NSData *data = bytes && length ? [NSData dataWithBytes:bytes length:length] : nil;
+    NSData *data = bytes && length && length <= 65536 ? [NSData dataWithBytes:bytes length:length] : nil;
     id decoded = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil] : nil;
     NSDictionary *request = [decoded isKindOfClass:NSDictionary.class] ? decoded : nil;
     if ([command isEqualToString:@"submitOTP"]) {

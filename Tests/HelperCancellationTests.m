@@ -82,6 +82,12 @@ int main(void) {
         assert(!session.pendingOTP && !session.waitingForOTP);
         assert(![session acceptOTP:@"late" attempt:@"synthetic-attempt" uid:getuid()]);
         session.otpSubmitted = NO;
+        session.deadline = NSDate.date.timeIntervalSince1970 - 1;
+        session.waitingForOTP = YES;
+        assert(![session acceptOTP:@"expired" attempt:@"synthetic-attempt" uid:getuid()]);
+        assert([session waitForOTP] == nil && session.timedOut && !session.pendingOTP);
+        session.timedOut = NO;
+        session.deadline = NSDate.date.timeIntervalSince1970 + 60;
         session.commandFD = -1;
         atomic_store(&cancellationRequested, false);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{

@@ -45,7 +45,7 @@ def findings(data, path, private_terms=(), binary=False):
         value = (quoted if quoted is not None else unquoted).strip()
         if not value or value.startswith((b"$", b"\\(")) or (unquoted and value in REFERENCES):
             continue
-        if unquoted and path.endswith((".swift", ".m", ".py", ".sh", ".h")):
+        if unquoted and path.endswith((".swift", ".m", ".py", ".h")):
             continue
         if tests and value in FIXTURES:
             continue
@@ -75,6 +75,7 @@ def scan_objects(roots, terms):
     # Tree entries are checked separately to catch renamed, unchanged blobs.
     rows = git("rev-list", "--objects", *roots, "--").splitlines()
     # cat-file streams one object at a time, including annotated tag objects.
+    metadata = bytearray()
     with subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
         for row in rows:
             oid, _, raw_path = row.partition(b" ")
@@ -96,11 +97,14 @@ def scan_objects(roots, terms):
                     offset = end + 1 + len(oid) // 2
                 continue
             if kind in (b"commit", b"tag"):
+                metadata.extend(data + b"\n")
                 for line in data.partition(b"\n\n")[0].splitlines():
                     if line.startswith((b"author ", b"committer ", b"tagger ")):
                         identity(line)
             check(data, path, terms)
         proc.stdin.close()
+    if metadata:
+        leaks("stdin", data=metadata)
     print(f"Checked {len(rows)} Git objects")
 
 
@@ -110,17 +114,22 @@ def identity(line):
         raise ValueError("Use a GitHub noreply identity for public history")
 
 
-def leaks(*args):
+def leaks(*args, data=None):
     subprocess.run(["gitleaks", *args, "--redact=100", "--no-banner", "--exit-code=1"],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   input=data, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["staged", "history", "push"])
+    parser.add_argument("mode", choices=["staged", "message", "history", "push"])
     parser.add_argument("refs", nargs="*")
     args = parser.parse_args()
     terms = private_terms()
+    if args.mode == "message":
+        message = Path(args.refs[0]).read_bytes()
+        check(message, "", terms)
+        leaks("stdin", data=message)
+        return
     if args.mode == "staged":
         for var in ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"]:
             ident = git("var", var)

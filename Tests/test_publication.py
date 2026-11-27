@@ -50,6 +50,7 @@ class PublicationTests(unittest.TestCase):
             git("commit", "-qm", "clean")
             git("init", "--bare", "-q", "../remote")
             git("push", "../remote", "HEAD:refs/heads/main")
+            git("commit", "--allow-empty", "-qm", "contact " + "fixture" + "@company.example.org", ok=False)
             git("config", "user.email", "fixture" + "@company.example.org")
             git("commit", "--allow-empty", "-qm", "identity", ok=False)
             git("config", "user.email", "fixture@users.noreply.github.com")
