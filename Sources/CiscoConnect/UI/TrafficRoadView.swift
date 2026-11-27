@@ -1,0 +1,90 @@
+import SwiftUI
+
+struct TrafficRoadView: View {
+    let history: TrafficHistory
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.panelIsVisible) private var isVisible
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let latest = history.latest {
+                HStack {
+                    rateLabel("↓ Приём", latest.received, .teal)
+                    Spacer()
+                    rateLabel("↑ Передача", latest.transmitted, .indigo)
+                }
+                TrafficRoad(received: latest.received, transmitted: latest.transmitted,
+                            animates: isVisible && !reduceMotion, sampledAt: latest.id,
+                            inboundOffset: history.inboundOffset, outboundOffset: history.outboundOffset)
+            } else {
+                Text("Ожидание статистики трафика…").foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+    }
+
+    private func rateLabel(_ title: String, _ rate: Double, _ color: Color) -> some View {
+        let formatted = Int64(clamping: UInt64(min(rate.rounded(), Double(Int64.max))))
+            .formatted(.byteCount(style: .file, allowedUnits: [.bytes, .kb, .mb, .gb]))
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(title).foregroundStyle(color)
+            Text(formatted + "/с").monospacedDigit()
+        }
+    }
+}
+
+struct TrafficRoad: View {
+    let received: Double
+    let transmitted: Double
+    let animates: Bool
+    let sampledAt: TimeInterval
+    var inboundOffset: Double = 0
+    var outboundOffset: Double = 0
+
+    var body: some View {
+        let rx = TrafficLane(bytesPerSecond: received)
+        let tx = TrafficLane(bytesPerSecond: transmitted)
+        let moving = animates && rx.count + tx.count > 0
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: !moving)) { _ in
+            let elapsed = moving ? max(0, ProcessInfo.processInfo.systemUptime - sampledAt) : 0
+            Canvas { context, size in
+                let bounds = CGRect(origin: .zero, size: size)
+                let asphalt = Path(roundedRect: bounds, cornerRadius: 6)
+                context.clip(to: asphalt)
+                context.fill(asphalt, with: .color(.primary.opacity(0.07)))
+                var divider = Path()
+                divider.move(to: CGPoint(x: 0, y: size.height / 2))
+                divider.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                context.stroke(divider, with: .color(.secondary.opacity(0.55)),
+                               style: StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                drawLane(context, width: size.width, y: size.height * 0.25, count: rx.count,
+                         offset: animates ? inboundOffset + elapsed * rx.speed : 0, direction: 1, color: .teal)
+                drawLane(context, width: size.width, y: size.height * 0.75, count: tx.count,
+                         offset: animates ? outboundOffset + elapsed * tx.speed : 0, direction: -1, color: .indigo)
+            }
+        }
+        .frame(height: 38)
+        .accessibilityHidden(true)
+    }
+
+    private func drawLane(_ context: GraphicsContext, width: CGFloat, y: CGFloat, count: Int,
+                          offset: Double, direction: CGFloat, color: Color) {
+        // Spread the first cars across the road. New cars fill existing gaps.
+        let slots = [3, 11, 7, 15, 1, 9, 5, 13, 0, 8, 4, 12, 2, 10, 6, 14]
+        let track = width + 16
+        for slot in slots.prefix(count) {
+            let phase = (track * (Double(slot) + 0.5) / 16 + offset).truncatingRemainder(dividingBy: track)
+            let center = direction > 0 ? phase - 8 : width + 8 - phase
+            let body = CGRect(x: center - 7, y: y - 3.75, width: 14, height: 7.5)
+            for axle in [-4.0, 4.0] {
+                let wheels = CGRect(x: center + axle - 1.2, y: y - 4.45, width: 2.4, height: 8.9)
+                context.fill(Path(roundedRect: wheels, cornerRadius: 0.7), with: .color(.secondary))
+            }
+            context.fill(Path(roundedRect: body, cornerRadius: 2.8), with: .color(color))
+            let rearGlass = CGRect(x: center - direction * 3.7 - 0.8, y: y - 2.1, width: 1.6, height: 4.2)
+            context.fill(Path(roundedRect: rearGlass, cornerRadius: 0.65), with: .color(.white.opacity(0.45)))
+            let windshield = CGRect(x: center + direction * 2 - 1.4, y: y - 2.6, width: 2.8, height: 5.2)
+            context.fill(Path(roundedRect: windshield, cornerRadius: 0.9), with: .color(.white.opacity(0.9)))
+        }
+    }
+}
